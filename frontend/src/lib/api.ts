@@ -115,5 +115,9 @@ export const api = {
     getAiHealth(): Promise<{ available: boolean; provider: string; model: string }> {
       return request("/api/demo/ai/health")
     },
+    listReports(reportType?: string): Promise<ReportResponse[]> {
+      const params = reportType ? `?report_type=${reportType}` : ""
+      return request(`/api/demo/reports${params}`)
+    },
   },
 }

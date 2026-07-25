@@ -78,6 +78,17 @@ async def demo_generate_report(body: ReportGenerateRequest):
         sprint_end_date=sprint_end_date,
         custom_instructions=body.custom_instructions,
     )
+
+    from app.reports.storage import save_report
+    from app.demo.data import DEMO_ORG_ID
+    save_report(
+        organization_id=DEMO_ORG_ID,
+        report_data=report.model_dump(),
+        source_keys=report.source_issue_keys,
+        generated_by="demo-user",
+        custom_instructions=body.custom_instructions,
+    )
+
     return report
 
 
@@ -87,3 +98,21 @@ async def demo_ai_health():
     provider = get_ai_provider()
     available = await provider.health_check()
     return {"available": available, "provider": "ollama", "model": get_ai_provider()._model}
+
+
+@router.get("/reports")
+async def demo_list_reports(project_key: str | None = None, report_type: str | None = None):
+    from app.reports.storage import list_reports
+    from app.demo.data import DEMO_ORG_ID
+    return list_reports(DEMO_ORG_ID, project_key=project_key, report_type=report_type)
+
+
+@router.post("/reports/{report_a_id}/compare/{report_b_id}")
+async def demo_compare_reports(report_a_id: str, report_b_id: str):
+    from app.reports.storage import get_report, compare_reports
+    from app.demo.data import DEMO_ORG_ID
+    a = get_report(report_a_id, DEMO_ORG_ID)
+    b = get_report(report_b_id, DEMO_ORG_ID)
+    if not a or not b:
+        raise HTTPException(status_code=404, detail="Report not found")
+    return compare_reports(a, b)

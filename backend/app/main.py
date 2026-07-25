@@ -6,6 +6,7 @@ from app.auth.routes import router as auth_router
 from app.organizations.routes import router as org_router
 from app.demo.routes import router as demo_router
 from app.jira.routes import router as jira_router
+from app.reports.routes import router as reports_router
 
 
 @asynccontextmanager
@@ -30,6 +31,7 @@ app.include_router(auth_router)
 app.include_router(org_router)
 app.include_router(demo_router)
 app.include_router(jira_router)
+app.include_router(reports_router)
 
 
 @app.get("/api/health")
