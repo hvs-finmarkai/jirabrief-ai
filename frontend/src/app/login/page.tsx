@@ -140,6 +140,12 @@ export default function LoginPage() {
             </Link>
             <p className="text-xs text-warm-400 text-center mt-2">Try with realistic sample data — no account needed</p>
           </div>
+
+          <div className="mt-3">
+            <Link href="/admin/login" className="w-full flex items-center justify-center gap-2 py-2 text-xs text-warm-400 hover:text-warm-600 transition-colors">
+              Admin Login →
+            </Link>
+          </div>
         </div>
       </motion.div>
     </div>
