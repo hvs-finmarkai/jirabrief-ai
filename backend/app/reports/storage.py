@@ -2,8 +2,10 @@ from __future__ import annotations
 import json
 import uuid
 from datetime import datetime, timezone
-from pydantic import BaseModel, Field
-from typing import Literal
+from pydantic import BaseModel
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.models.tables import Report, ReportSource, ReportTemplateRow
 
 
 class StoredReport(BaseModel):
@@ -97,22 +99,79 @@ SYSTEM_TEMPLATES: list[ReportTemplate] = [
 ]
 
 
-_report_store: dict[str, StoredReport] = {}
+def _as_uuid(value: str | uuid.UUID | None) -> uuid.UUID | None:
+    # Report ids arrive straight off the URL path, so a malformed value has to
+    # come back as "not found" rather than blowing up the query with a cast error.
+    if value is None:
+        return None
+    try:
+        return uuid.UUID(str(value))
+    except (ValueError, TypeError):
+        return None
 
 
-def save_report(
+def _json(value: str | None):
+    if not value:
+        return None
+    try:
+        return json.loads(value)
+    except (ValueError, TypeError):
+        return None
+
+
+def _to_stored(report: Report) -> StoredReport:
+    return StoredReport(
+        id=str(report.id),
+        organization_id=str(report.organization_id),
+        project_key=report.project_key,
+        project_name=report.project_name,
+        sprint_name=report.sprint_name,
+        sprint_id=report.sprint_id,
+        report_type=report.report_type,
+        title=report.title,
+        status=report.status,
+        approval_status=report.approval_status,
+        overall_status=report.overall_status,
+        generated_content=_json(report.generated_content) or {},
+        edited_content=_json(report.edited_content),
+        ai_provider=report.ai_provider,
+        ai_model=report.ai_model,
+        quality_status=report.quality_status,
+        quality_details=_json(report.quality_details),
+        custom_instructions=report.custom_instructions,
+        source_issue_keys=[s.issue_key for s in report.sources],
+        generated_by=report.generated_by,
+        approved_by=report.approved_by,
+        approved_at=report.approved_at.isoformat() if report.approved_at else None,
+        generated_at=report.generated_at.isoformat(),
+        created_at=report.created_at.isoformat(),
+    )
+
+
+async def _fetch(db: AsyncSession, report_id: str, organization_id: str) -> Report | None:
+    report_uuid = _as_uuid(report_id)
+    org_uuid = _as_uuid(organization_id)
+    if not report_uuid or not org_uuid:
+        return None
+
+    result = await db.execute(
+        select(Report).where(Report.id == report_uuid, Report.organization_id == org_uuid)
+    )
+    return result.scalar_one_or_none()
+
+
+async def save_report(
+    db: AsyncSession,
     organization_id: str,
     report_data: dict,
     source_keys: list[str],
     generated_by: str | None = None,
     custom_instructions: str | None = None,
 ) -> StoredReport:
-    report_id = str(uuid.uuid4())
-    now = datetime.now(timezone.utc).isoformat()
+    quality = report_data.get("quality")
 
-    stored = StoredReport(
-        id=report_id,
-        organization_id=organization_id,
+    report = Report(
+        organization_id=uuid.UUID(str(organization_id)),
         project_key=report_data.get("project_key", ""),
         project_name=report_data.get("project_name", ""),
         sprint_name=report_data.get("sprint_name"),
@@ -122,33 +181,30 @@ def save_report(
         status="READY",
         approval_status="DRAFT",
         overall_status=report_data.get("overall_status"),
-        generated_content=report_data.get("content", {}),
+        generated_content=json.dumps(report_data.get("content", {}), default=str),
         edited_content=None,
         ai_provider=report_data.get("ai_provider", ""),
         ai_model=report_data.get("ai_model", ""),
-        quality_status=report_data.get("quality", {}).get("status"),
-        quality_details=report_data.get("quality"),
+        quality_status=(quality or {}).get("status"),
+        quality_details=json.dumps(quality, default=str) if quality is not None else None,
         custom_instructions=custom_instructions,
-        source_issue_keys=source_keys,
         generated_by=generated_by,
-        approved_by=None,
-        approved_at=None,
-        generated_at=now,
-        created_at=now,
     )
+    report.sources = [ReportSource(issue_key=key) for key in source_keys]
 
-    _report_store[report_id] = stored
-    return stored
-
-
-def get_report(report_id: str, organization_id: str) -> StoredReport | None:
-    report = _report_store.get(report_id)
-    if report and report.organization_id == organization_id:
-        return report
-    return None
+    db.add(report)
+    await db.commit()
+    await db.refresh(report)
+    return _to_stored(report)
 
 
-def list_reports(
+async def get_report(db: AsyncSession, report_id: str, organization_id: str) -> StoredReport | None:
+    report = await _fetch(db, report_id, organization_id)
+    return _to_stored(report) if report else None
+
+
+async def list_reports(
+    db: AsyncSession,
     organization_id: str,
     project_key: str | None = None,
     report_type: str | None = None,
@@ -156,35 +212,45 @@ def list_reports(
     limit: int = 50,
     offset: int = 0,
 ) -> list[StoredReport]:
-    results = [r for r in _report_store.values() if r.organization_id == organization_id]
+    org_uuid = _as_uuid(organization_id)
+    if not org_uuid:
+        return []
 
+    stmt = select(Report).where(Report.organization_id == org_uuid)
     if project_key:
-        results = [r for r in results if r.project_key == project_key]
+        stmt = stmt.where(Report.project_key == project_key)
     if report_type:
-        results = [r for r in results if r.report_type == report_type]
+        stmt = stmt.where(Report.report_type == report_type)
     if approval_status:
-        results = [r for r in results if r.approval_status == approval_status]
+        stmt = stmt.where(Report.approval_status == approval_status)
 
-    results.sort(key=lambda r: r.generated_at, reverse=True)
-    return results[offset:offset + limit]
+    stmt = stmt.order_by(Report.generated_at.desc()).limit(limit).offset(offset)
+    result = await db.execute(stmt)
+    return [_to_stored(r) for r in result.scalars().all()]
 
 
-def edit_report(report_id: str, organization_id: str, edited_content: dict) -> StoredReport | None:
-    report = get_report(report_id, organization_id)
+async def edit_report(
+    db: AsyncSession, report_id: str, organization_id: str, edited_content: dict
+) -> StoredReport | None:
+    report = await _fetch(db, report_id, organization_id)
     if not report:
         return None
-    report.edited_content = edited_content
-    return report
+
+    report.edited_content = json.dumps(edited_content, default=str)
+    await db.commit()
+    return _to_stored(report)
 
 
-def update_approval(report_id: str, organization_id: str, new_status: str, actor: str) -> StoredReport | None:
+async def update_approval(
+    db: AsyncSession, report_id: str, organization_id: str, new_status: str, actor: str
+) -> StoredReport | None:
     valid_transitions = {
         "DRAFT": ["IN_REVIEW"],
         "IN_REVIEW": ["APPROVED", "DRAFT"],
         "APPROVED": ["SENT", "DRAFT"],
         "SENT": [],
     }
-    report = get_report(report_id, organization_id)
+    report = await _fetch(db, report_id, organization_id)
     if not report:
         return None
     if new_status not in valid_transitions.get(report.approval_status, []):
@@ -193,8 +259,9 @@ def update_approval(report_id: str, organization_id: str, new_status: str, actor
     report.approval_status = new_status
     if new_status == "APPROVED":
         report.approved_by = actor
-        report.approved_at = datetime.now(timezone.utc).isoformat()
-    return report
+        report.approved_at = datetime.now(timezone.utc)
+    await db.commit()
+    return _to_stored(report)
 
 
 def compare_reports(report_a: StoredReport, report_b: StoredReport) -> ComparisonResult:
@@ -241,5 +308,30 @@ def compare_reports(report_a: StoredReport, report_b: StoredReport) -> Compariso
     )
 
 
-def get_templates(organization_id: str | None = None) -> list[ReportTemplate]:
-    return list(SYSTEM_TEMPLATES)
+async def get_templates(db: AsyncSession, organization_id: str | None = None) -> list[ReportTemplate]:
+    templates = list(SYSTEM_TEMPLATES)
+
+    org_uuid = _as_uuid(organization_id)
+    if not org_uuid:
+        return templates
+
+    result = await db.execute(
+        select(ReportTemplateRow)
+        .where(ReportTemplateRow.organization_id == org_uuid)
+        .order_by(ReportTemplateRow.created_at)
+    )
+    for row in result.scalars().all():
+        sections = _json(row.enabled_sections)
+        templates.append(
+            ReportTemplate(
+                id=str(row.id),
+                name=row.name,
+                report_type=row.report_type,
+                tone=row.tone,
+                length=row.length,
+                enabled_sections=[str(s) for s in sections] if isinstance(sections, list) else None,
+                additional_instructions=row.additional_instructions,
+                is_system=row.is_system,
+            )
+        )
+    return templates

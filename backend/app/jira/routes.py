@@ -4,12 +4,14 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, delete
+from app.core.audit import log_event
 from app.core.database import get_db
 from app.core.security import get_current_org_member, require_role
-from app.core.encryption import encrypt_token, decrypt_token
+from app.core.encryption import encrypt_token, decrypt_token, EncryptionNotConfigured
+from app.core.net import validate_outbound_url, UnsafeURLError
 from app.jira.client import JiraClient, JiraClientError
-from app.models.tables import OrganizationMember
+from app.models.tables import OrganizationMember, JiraConnection
 
 router = APIRouter(prefix="/api/jira", tags=["jira"])
 
@@ -52,15 +54,19 @@ class SyncStatusResponse(BaseModel):
     message: str | None
 
 
-_connections: dict[str, dict] = {}
-
-
 @router.post("/connect", response_model=JiraConnectionResponse)
 async def connect_jira(
     body: JiraConnectRequest,
     member: OrganizationMember = Depends(require_role("OWNER", "ADMIN")),
+    db: AsyncSession = Depends(get_db),
 ):
-    site_url = body.jira_site_url.rstrip("/")
+    # The site URL is attacker-controllable input that the backend then fetches,
+    # so it has to clear the SSRF guard before any request is made with it.
+    try:
+        site_url = validate_outbound_url(body.jira_site_url)
+    except UnsafeURLError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
     client = JiraClient(base_url=site_url, email=body.email, api_token=body.api_token)
 
     try:
@@ -68,63 +74,81 @@ async def connect_jira(
     except JiraClientError as e:
         raise HTTPException(status_code=401, detail=f"Failed to connect: {str(e)}")
 
-    conn_id = str(uuid.uuid4())
-    org_id = str(member.organization_id)
+    try:
+        encrypted_token = encrypt_token(body.api_token)
+    except EncryptionNotConfigured as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-    _connections[org_id] = {
-        "id": conn_id,
-        "connection_name": body.connection_name,
-        "jira_site_url": site_url,
-        "jira_email": body.email,
-        "encrypted_api_token": encrypt_token(body.api_token),
-        "status": "active",
-        "last_connected_at": datetime.now(timezone.utc).isoformat(),
-        "org_id": org_id,
-    }
+    now = datetime.now(timezone.utc)
+    conn = await _load_connection(db, member.organization_id)
+
+    if conn:
+        conn.connection_name = body.connection_name
+        conn.jira_site_url = site_url
+        conn.jira_email = body.email
+        conn.encrypted_api_token = encrypted_token
+        conn.status = "active"
+        conn.last_connected_at = now
+    else:
+        conn = JiraConnection(
+            organization_id=member.organization_id,
+            connection_name=body.connection_name,
+            jira_site_url=site_url,
+            jira_email=body.email,
+            encrypted_api_token=encrypted_token,
+            status="active",
+            last_connected_at=now,
+        )
+        db.add(conn)
+
+    await db.commit()
 
     return JiraConnectionResponse(
-        id=conn_id,
-        connection_name=body.connection_name,
-        jira_site_url=site_url,
-        jira_email=body.email,
-        status="active",
-        last_connected_at=datetime.now(timezone.utc).isoformat(),
+        id=str(conn.id),
+        connection_name=conn.connection_name,
+        jira_site_url=conn.jira_site_url,
+        jira_email=conn.jira_email,
+        status=conn.status,
+        last_connected_at=now.isoformat(),
     )
 
 
 @router.delete("/disconnect")
 async def disconnect_jira(
     member: OrganizationMember = Depends(require_role("OWNER", "ADMIN")),
+    db: AsyncSession = Depends(get_db),
 ):
-    org_id = str(member.organization_id)
-    if org_id in _connections:
-        del _connections[org_id]
+    await db.execute(
+        delete(JiraConnection).where(JiraConnection.organization_id == member.organization_id)
+    )
+    await db.commit()
     return {"disconnected": True}
 
 
 @router.get("/connection", response_model=JiraConnectionResponse | None)
 async def get_connection(
     member: OrganizationMember = Depends(get_current_org_member),
+    db: AsyncSession = Depends(get_db),
 ):
-    org_id = str(member.organization_id)
-    conn = _connections.get(org_id)
+    conn = await _load_connection(db, member.organization_id)
     if not conn:
         return None
     return JiraConnectionResponse(
-        id=conn["id"],
-        connection_name=conn["connection_name"],
-        jira_site_url=conn["jira_site_url"],
-        jira_email=conn["jira_email"],
-        status=conn["status"],
-        last_connected_at=conn["last_connected_at"],
+        id=str(conn.id),
+        connection_name=conn.connection_name,
+        jira_site_url=conn.jira_site_url,
+        jira_email=conn.jira_email,
+        status=conn.status,
+        last_connected_at=conn.last_connected_at.isoformat() if conn.last_connected_at else None,
     )
 
 
 @router.get("/projects", response_model=list[JiraProjectResponse])
 async def get_projects(
     member: OrganizationMember = Depends(get_current_org_member),
+    db: AsyncSession = Depends(get_db),
 ):
-    client = _get_client(str(member.organization_id))
+    client = await _get_client(db, member.organization_id)
     try:
         projects = await client.get_projects()
         return [
@@ -139,8 +163,9 @@ async def get_projects(
 async def get_sprints(
     project_key: str,
     member: OrganizationMember = Depends(get_current_org_member),
+    db: AsyncSession = Depends(get_db),
 ):
-    client = _get_client(str(member.organization_id))
+    client = await _get_client(db, member.organization_id)
     try:
         sprints = await client.get_sprints(project_key)
         return [
@@ -162,8 +187,9 @@ async def get_issues(
     project_key: str,
     sprint_id: int | None = None,
     member: OrganizationMember = Depends(get_current_org_member),
+    db: AsyncSession = Depends(get_db),
 ):
-    client = _get_client(str(member.organization_id))
+    client = await _get_client(db, member.organization_id)
     try:
         issues = await client.get_issues(project_key, sprint_id)
         return issues
@@ -176,8 +202,9 @@ async def trigger_sync(
     project_key: str,
     sprint_id: int | None = None,
     member: OrganizationMember = Depends(require_role("OWNER", "ADMIN", "MEMBER")),
+    db: AsyncSession = Depends(get_db),
 ):
-    client = _get_client(str(member.organization_id))
+    client = await _get_client(db, member.organization_id)
     try:
         issues = await client.get_issues(project_key, sprint_id)
         return SyncStatusResponse(
@@ -201,8 +228,9 @@ async def generate_from_jira(
     sprint_id: int | None = None,
     report_type: str = "SPRINT_SUMMARY",
     member: OrganizationMember = Depends(get_current_org_member),
+    db: AsyncSession = Depends(get_db),
 ):
-    client = _get_client(str(member.organization_id))
+    client = await _get_client(db, member.organization_id)
     try:
         issues = await client.get_issues(project_key, sprint_id)
     except JiraClientError as e:
@@ -244,12 +272,48 @@ async def generate_from_jira(
         sprint_name=sprint_name,
         sprint_end_date=sprint_end_date,
     )
-    return report
+
+    # Persist it, otherwise the report exists only in this response and
+    # /api/reports stays permanently empty.
+    from app.reports.storage import save_report
+
+    stored = await save_report(
+        db,
+        organization_id=str(member.organization_id),
+        report_data=report.model_dump(),
+        source_keys=report.source_issue_keys,
+        generated_by=member.user_id,
+    )
+
+    await log_event(
+        db,
+        event="report.generated",
+        actor=member.user_id,
+        organization_id=str(member.organization_id),
+        metadata={"report_id": stored.id, "project_key": project_key, "report_type": report_type},
+    )
+
+    # Return the stored id so the client can immediately link to the saved report.
+    payload = report.model_dump()
+    payload["id"] = stored.id
+    return payload
 
 
-def _get_client(org_id: str) -> JiraClient:
-    conn = _connections.get(org_id)
+async def _load_connection(db: AsyncSession, org_id: uuid.UUID) -> JiraConnection | None:
+    # One connection per org, but nothing at the DB level enforces that, so take
+    # the first row rather than blowing up on a duplicate.
+    result = await db.execute(
+        select(JiraConnection).where(JiraConnection.organization_id == org_id).limit(1)
+    )
+    return result.scalars().first()
+
+
+async def _get_client(db: AsyncSession, org_id: uuid.UUID) -> JiraClient:
+    conn = await _load_connection(db, org_id)
     if not conn:
         raise HTTPException(status_code=400, detail="No Jira connection. Connect Jira first.")
-    token = decrypt_token(conn["encrypted_api_token"])
-    return JiraClient(base_url=conn["jira_site_url"], email=conn["jira_email"], api_token=token)
+    try:
+        token = decrypt_token(conn.encrypted_api_token)
+    except EncryptionNotConfigured as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return JiraClient(base_url=conn.jira_site_url, email=conn.jira_email, api_token=token)

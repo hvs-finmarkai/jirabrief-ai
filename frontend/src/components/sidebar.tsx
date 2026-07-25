@@ -13,6 +13,7 @@ import {
   LogOut,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { clearOrgContext } from "@/lib/api"
 import type { User } from "@supabase/supabase-js"
 
 interface SidebarProps {
@@ -36,6 +37,8 @@ export function Sidebar({ user }: SidebarProps) {
   async function handleSignOut() {
     const supabase = createClient()
     await supabase.auth.signOut()
+    // Drop the cached org id so the next account starts from its own org list.
+    clearOrgContext()
     router.push("/login")
     router.refresh()
   }

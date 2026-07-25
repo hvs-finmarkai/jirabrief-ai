@@ -1,5 +1,7 @@
 from __future__ import annotations
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.core.database import get_db
 from app.demo.data import get_demo_projects, get_demo_sprints, get_demo_issues, DEMO_ORG_NAME
 from app.metrics.engine import calculate_sprint_health
 from app.reports.schemas import ReportGenerateRequest, ReportResponse
@@ -47,7 +49,7 @@ async def demo_sprint_health(sprint_id: str):
 
 
 @router.post("/reports/generate", response_model=ReportResponse)
-async def demo_generate_report(body: ReportGenerateRequest):
+async def demo_generate_report(body: ReportGenerateRequest, db: AsyncSession = Depends(get_db)):
     issues = get_demo_issues(body.sprint_id)
     if not issues:
         raise HTTPException(status_code=404, detail="No issues found for the selected sprint")
@@ -81,7 +83,8 @@ async def demo_generate_report(body: ReportGenerateRequest):
 
     from app.reports.storage import save_report
     from app.demo.data import DEMO_ORG_ID
-    save_report(
+    await save_report(
+        db,
         organization_id=DEMO_ORG_ID,
         report_data=report.model_dump(),
         source_keys=report.source_issue_keys,
@@ -97,22 +100,28 @@ async def demo_ai_health():
     from app.ai.provider import get_ai_provider
     provider = get_ai_provider()
     available = await provider.health_check()
-    return {"available": available, "provider": "ollama", "model": get_ai_provider()._model}
+    return {"available": available, "provider": provider.name, "model": provider.model}
 
 
 @router.get("/reports")
-async def demo_list_reports(project_key: str | None = None, report_type: str | None = None):
+async def demo_list_reports(
+    project_key: str | None = None,
+    report_type: str | None = None,
+    db: AsyncSession = Depends(get_db),
+):
     from app.reports.storage import list_reports
     from app.demo.data import DEMO_ORG_ID
-    return list_reports(DEMO_ORG_ID, project_key=project_key, report_type=report_type)
+    return await list_reports(db, DEMO_ORG_ID, project_key=project_key, report_type=report_type)
 
 
 @router.post("/reports/{report_a_id}/compare/{report_b_id}")
-async def demo_compare_reports(report_a_id: str, report_b_id: str):
+async def demo_compare_reports(
+    report_a_id: str, report_b_id: str, db: AsyncSession = Depends(get_db)
+):
     from app.reports.storage import get_report, compare_reports
     from app.demo.data import DEMO_ORG_ID
-    a = get_report(report_a_id, DEMO_ORG_ID)
-    b = get_report(report_b_id, DEMO_ORG_ID)
+    a = await get_report(db, report_a_id, DEMO_ORG_ID)
+    b = await get_report(db, report_b_id, DEMO_ORG_ID)
     if not a or not b:
         raise HTTPException(status_code=404, detail="Report not found")
     return compare_reports(a, b)

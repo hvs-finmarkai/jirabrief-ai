@@ -1,9 +1,12 @@
 from __future__ import annotations
 import uuid
-from datetime import datetime, timedelta, timezone, time
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 from pydantic import BaseModel, Field
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 from zoneinfo import ZoneInfo
+from app.models.tables import ReportSchedule
 
 
 class Schedule(BaseModel):
@@ -53,9 +56,6 @@ class ScheduleUpdateRequest(BaseModel):
     enabled: bool | None = None
 
 
-_schedule_store: dict[str, Schedule] = {}
-
-
 def calculate_next_run(
     frequency: str,
     time_of_day: str,
@@ -65,9 +65,8 @@ def calculate_next_run(
     after: datetime | None = None,
 ) -> datetime:
     tz = ZoneInfo(tz_name)
-    now = after or datetime.now(tz)
+    now = after.astimezone(tz) if after else datetime.now(tz)
     hour, minute = int(time_of_day.split(":")[0]), int(time_of_day.split(":")[1])
-    target_time = time(hour, minute)
 
     if frequency == "daily":
         candidate = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
@@ -99,8 +98,47 @@ def calculate_next_run(
     return now.astimezone(timezone.utc)
 
 
-def create_schedule(org_id: str, body: ScheduleCreateRequest, created_by: str | None = None) -> Schedule:
-    schedule_id = str(uuid.uuid4())
+def _to_schedule(row: ReportSchedule) -> Schedule:
+    return Schedule(
+        id=str(row.id),
+        organization_id=str(row.organization_id),
+        project_key=row.project_key,
+        project_name=row.project_name,
+        sprint_id=row.sprint_id,
+        report_type=row.report_type,
+        template_id=str(row.template_id) if row.template_id else None,
+        frequency=row.frequency,
+        day_of_week=row.day_of_week,
+        day_of_month=row.day_of_month,
+        time_of_day=row.time_of_day,
+        timezone=row.timezone,
+        require_approval=row.require_approval,
+        enabled=row.enabled,
+        next_run_at=row.next_run_at.isoformat() if row.next_run_at else None,
+        last_run_at=row.last_run_at.isoformat() if row.last_run_at else None,
+        last_run_status=row.last_run_status,
+        failure_count=row.failure_count,
+        created_by=row.created_by,
+        created_at=row.created_at.isoformat() if row.created_at else "",
+    )
+
+
+def _next_run_for(row: ReportSchedule) -> datetime:
+    return calculate_next_run(
+        frequency=row.frequency,
+        time_of_day=row.time_of_day,
+        tz_name=row.timezone,
+        day_of_week=row.day_of_week,
+        day_of_month=row.day_of_month,
+    )
+
+
+async def create_schedule(
+    db: AsyncSession,
+    org_id: str,
+    body: ScheduleCreateRequest,
+    created_by: str | None = None,
+) -> Schedule:
     next_run = calculate_next_run(
         frequency=body.frequency,
         time_of_day=body.time_of_day,
@@ -109,14 +147,13 @@ def create_schedule(org_id: str, body: ScheduleCreateRequest, created_by: str | 
         day_of_month=body.day_of_month,
     )
 
-    schedule = Schedule(
-        id=schedule_id,
-        organization_id=org_id,
+    row = ReportSchedule(
+        organization_id=uuid.UUID(org_id),
         project_key=body.project_key,
         project_name=body.project_name,
         sprint_id=body.sprint_id,
         report_type=body.report_type,
-        template_id=body.template_id,
+        template_id=uuid.UUID(body.template_id) if body.template_id else None,
         frequency=body.frequency,
         day_of_week=body.day_of_week,
         day_of_month=body.day_of_month,
@@ -124,87 +161,95 @@ def create_schedule(org_id: str, body: ScheduleCreateRequest, created_by: str | 
         timezone=body.timezone,
         require_approval=body.require_approval,
         enabled=True,
-        next_run_at=next_run.isoformat(),
-        last_run_at=None,
-        last_run_status=None,
+        next_run_at=next_run,
         failure_count=0,
         created_by=created_by,
-        created_at=datetime.now(timezone.utc).isoformat(),
     )
-
-    _schedule_store[schedule_id] = schedule
-    return schedule
-
-
-def list_schedules(org_id: str) -> list[Schedule]:
-    return [s for s in _schedule_store.values() if s.organization_id == org_id]
+    db.add(row)
+    await db.commit()
+    await db.refresh(row)
+    return _to_schedule(row)
 
 
-def get_schedule(schedule_id: str, org_id: str) -> Schedule | None:
-    s = _schedule_store.get(schedule_id)
-    if s and s.organization_id == org_id:
-        return s
-    return None
+async def list_schedules(db: AsyncSession, org_id: str) -> list[Schedule]:
+    result = await db.execute(
+        select(ReportSchedule)
+        .where(ReportSchedule.organization_id == uuid.UUID(org_id))
+        .order_by(ReportSchedule.created_at.desc())
+    )
+    return [_to_schedule(r) for r in result.scalars().all()]
 
 
-def update_schedule(schedule_id: str, org_id: str, body: ScheduleUpdateRequest) -> Schedule | None:
-    s = get_schedule(schedule_id, org_id)
-    if not s:
+async def _get_row(db: AsyncSession, schedule_id: str, org_id: str) -> ReportSchedule | None:
+    try:
+        sid = uuid.UUID(schedule_id)
+    except ValueError:
+        return None
+    result = await db.execute(
+        select(ReportSchedule).where(
+            ReportSchedule.id == sid,
+            ReportSchedule.organization_id == uuid.UUID(org_id),
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def get_schedule(db: AsyncSession, schedule_id: str, org_id: str) -> Schedule | None:
+    row = await _get_row(db, schedule_id, org_id)
+    return _to_schedule(row) if row else None
+
+
+async def update_schedule(
+    db: AsyncSession, schedule_id: str, org_id: str, body: ScheduleUpdateRequest
+) -> Schedule | None:
+    row = await _get_row(db, schedule_id, org_id)
+    if not row:
         return None
 
-    if body.frequency is not None:
-        s.frequency = body.frequency
-    if body.day_of_week is not None:
-        s.day_of_week = body.day_of_week
-    if body.day_of_month is not None:
-        s.day_of_month = body.day_of_month
-    if body.time_of_day is not None:
-        s.time_of_day = body.time_of_day
-    if body.timezone is not None:
-        s.timezone = body.timezone
-    if body.require_approval is not None:
-        s.require_approval = body.require_approval
-    if body.enabled is not None:
-        s.enabled = body.enabled
+    for field in (
+        "frequency",
+        "day_of_week",
+        "day_of_month",
+        "time_of_day",
+        "timezone",
+        "require_approval",
+        "enabled",
+    ):
+        value = getattr(body, field)
+        if value is not None:
+            setattr(row, field, value)
 
-    s.next_run_at = calculate_next_run(
-        frequency=s.frequency,
-        time_of_day=s.time_of_day,
-        tz_name=s.timezone,
-        day_of_week=s.day_of_week,
-        day_of_month=s.day_of_month,
-    ).isoformat()
-
-    return s
+    row.next_run_at = _next_run_for(row)
+    await db.commit()
+    await db.refresh(row)
+    return _to_schedule(row)
 
 
-def delete_schedule(schedule_id: str, org_id: str) -> bool:
-    s = get_schedule(schedule_id, org_id)
-    if s:
-        del _schedule_store[schedule_id]
-        return True
-    return False
+async def delete_schedule(db: AsyncSession, schedule_id: str, org_id: str) -> bool:
+    row = await _get_row(db, schedule_id, org_id)
+    if not row:
+        return False
+    await db.delete(row)
+    await db.commit()
+    return True
 
 
-def mark_run(schedule_id: str, org_id: str, success: bool, error_msg: str | None = None) -> Schedule | None:
-    s = get_schedule(schedule_id, org_id)
-    if not s:
+async def mark_run(
+    db: AsyncSession,
+    schedule_id: str,
+    org_id: str,
+    success: bool,
+    error_msg: str | None = None,
+) -> Schedule | None:
+    row = await _get_row(db, schedule_id, org_id)
+    if not row:
         return None
 
-    s.last_run_at = datetime.now(timezone.utc).isoformat()
-    s.last_run_status = "SUCCESS" if success else "FAILED"
+    row.last_run_at = datetime.now(timezone.utc)
+    row.last_run_status = "SUCCESS" if success else "FAILED"
+    row.failure_count = 0 if success else row.failure_count + 1
+    row.next_run_at = _next_run_for(row)
 
-    if not success:
-        s.failure_count += 1
-    else:
-        s.failure_count = 0
-
-    s.next_run_at = calculate_next_run(
-        frequency=s.frequency,
-        time_of_day=s.time_of_day,
-        tz_name=s.timezone,
-        day_of_week=s.day_of_week,
-        day_of_month=s.day_of_month,
-    ).isoformat()
-
-    return s
+    await db.commit()
+    await db.refresh(row)
+    return _to_schedule(row)

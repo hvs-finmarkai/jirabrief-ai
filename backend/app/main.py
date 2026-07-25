@@ -1,8 +1,12 @@
+import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import get_settings
 from app.core.rate_limit import RateLimitMiddleware
+from app.core.security_headers import SecurityHeadersMiddleware
+from app.demo.seed import ensure_demo_organization
+from app.scheduler.runner import SchedulerRunner
 from app.auth.routes import router as auth_router
 from app.organizations.routes import router as org_router
 from app.demo.routes import router as demo_router
@@ -23,7 +27,19 @@ async def lifespan(app: FastAPI):
             sentry_sdk.init(dsn=settings.sentry_dsn, environment=settings.app_env, traces_sample_rate=0.1)
         except ImportError:
             pass
-    yield
+
+    try:
+        await ensure_demo_organization()
+    except Exception:
+        # Demo mode is a nice-to-have; never block startup on it.
+        logging.getLogger(__name__).warning("Could not seed demo organization", exc_info=True)
+
+    scheduler = SchedulerRunner()
+    await scheduler.start()
+    try:
+        yield
+    finally:
+        await scheduler.stop()
 
 
 app = FastAPI(
@@ -34,6 +50,7 @@ app = FastAPI(
     redoc_url=None,
 )
 
+app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(RateLimitMiddleware)
 
 app.add_middleware(

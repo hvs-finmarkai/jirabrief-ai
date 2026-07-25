@@ -1,17 +1,108 @@
 from __future__ import annotations
 import json
+import logging
 import uuid
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 from pydantic import BaseModel
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 import httpx
-from app.core.config import get_settings
+from app.core.encryption import encrypt_token, decrypt_token, EncryptionNotConfigured
+from app.core.net import UnsafeURLError, validate_outbound_url
+from app.models.tables import DeliveryChannel as DeliveryChannelRow, DeliveryLog as DeliveryLogRow
+
+if TYPE_CHECKING:
+    from app.reports.storage import StoredReport
+
+logger = logging.getLogger(__name__)
+
+# Config keys whose values are credentials: encrypted at rest, masked in
+# responses, and scrubbed out of provider error text before it is stored or
+# returned. A Slack webhook URL is itself the credential, hence its presence here.
+SECRET_CONFIG_FIELDS = ("api_key", "api_token", "webhook_url", "token", "password", "secret")
+
+# User-supplied URLs the server itself makes requests to; every one must clear
+# the SSRF guard before it is used.
+CHANNEL_URL_FIELDS = {"slack": "webhook_url", "confluence": "base_url"}
 
 
 class DeliveryResult(BaseModel):
     success: bool
     error_code: str | None = None
     error_message: str | None = None
+
+
+def mask_secret(value: str) -> str:
+    return f"***{value[-4:]}" if len(value) > 8 else "***"
+
+
+def redact_secrets(text: str | None, config: dict) -> str | None:
+    """Strip any credential from `config` out of provider error text.
+
+    httpx errors and upstream response bodies can echo the request URL, which
+    for Slack is the webhook secret itself.
+    """
+    if not text:
+        return text
+    for key in SECRET_CONFIG_FIELDS:
+        value = config.get(key)
+        if isinstance(value, str) and len(value) >= 8 and value in text:
+            text = text.replace(value, mask_secret(value))
+    return text
+
+
+def validate_channel_urls(channel_type: str, config: dict) -> None:
+    """Raise UnsafeURLError if this channel's outbound URL is not safe to call."""
+    field = CHANNEL_URL_FIELDS.get(channel_type)
+    if not field:
+        return
+    raw = config.get(field)
+    if isinstance(raw, str) and raw.strip():
+        validate_outbound_url(raw)
+
+
+def encode_channel_config(config: dict) -> str:
+    """JSON for the delivery_channels.config TEXT column, credentials encrypted."""
+    stored = dict(config)
+    for key in SECRET_CONFIG_FIELDS:
+        value = stored.get(key)
+        if isinstance(value, str) and value:
+            stored[key] = encrypt_token(value)
+    return json.dumps(stored)
+
+
+def decode_channel_config(raw: str) -> dict:
+    config = _load_config(raw)
+    for key in SECRET_CONFIG_FIELDS:
+        value = config.get(key)
+        if isinstance(value, str) and value:
+            config[key] = decrypt_token(value)
+    return config
+
+
+def masked_channel_config(raw: str) -> dict:
+    """Stored config with every credential reduced to a trailing fragment."""
+    config = _load_config(raw)
+    masked = {}
+    for key, value in config.items():
+        if key in SECRET_CONFIG_FIELDS and isinstance(value, str) and value:
+            try:
+                masked[key] = mask_secret(decrypt_token(value))
+            except EncryptionNotConfigured:
+                masked[key] = "***"
+        else:
+            masked[key] = value
+    return masked
+
+
+def _load_config(raw: str) -> dict:
+    try:
+        config = json.loads(raw or "{}")
+    except ValueError:
+        return {}
+    return config if isinstance(config, dict) else {}
 
 
 class DeliveryProvider(ABC):
@@ -78,6 +169,11 @@ class SlackProvider(DeliveryProvider):
         if not webhook_url:
             return DeliveryResult(success=False, error_code="MISSING_CONFIG", error_message="Webhook URL required")
 
+        try:
+            webhook_url = validate_outbound_url(webhook_url)
+        except UnsafeURLError as e:
+            return DeliveryResult(success=False, error_code="UNSAFE_URL", error_message=str(e))
+
         blocks = [
             {"type": "header", "text": {"type": "plain_text", "text": subject[:150]}},
             {"type": "section", "text": {"type": "mrkdwn", "text": content[:3000]}},
@@ -99,6 +195,11 @@ class SlackProvider(DeliveryProvider):
         webhook_url = config.get("webhook_url", "")
         if not webhook_url:
             return DeliveryResult(success=False, error_code="MISSING_URL", error_message="Slack webhook URL required")
+
+        try:
+            webhook_url = validate_outbound_url(webhook_url)
+        except UnsafeURLError as e:
+            return DeliveryResult(success=False, error_code="UNSAFE_URL", error_message=str(e))
 
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
@@ -123,6 +224,11 @@ class ConfluenceProvider(DeliveryProvider):
 
         if not all([base_url, email, api_token, space_key]):
             return DeliveryResult(success=False, error_code="MISSING_CONFIG", error_message="Confluence URL, email, token, and space key required")
+
+        try:
+            base_url = validate_outbound_url(base_url)
+        except UnsafeURLError as e:
+            return DeliveryResult(success=False, error_code="UNSAFE_URL", error_message=str(e))
 
         body = {
             "type": "page",
@@ -154,6 +260,11 @@ class ConfluenceProvider(DeliveryProvider):
 
         if not all([base_url, email, api_token]):
             return DeliveryResult(success=False, error_code="MISSING_CONFIG", error_message="URL, email, and token required")
+
+        try:
+            base_url = validate_outbound_url(base_url)
+        except UnsafeURLError as e:
+            return DeliveryResult(success=False, error_code="UNSAFE_URL", error_message=str(e))
 
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
@@ -196,11 +307,53 @@ class DeliveryLog(BaseModel):
     created_at: str
 
 
-_log_store: list[DeliveryLog] = []
 MAX_RETRIES = 3
 
 
+def _as_uuid(value: str | uuid.UUID | None) -> uuid.UUID | None:
+    if not value:
+        return None
+    if isinstance(value, uuid.UUID):
+        return value
+    return uuid.UUID(value)
+
+
+def _new_log_row(
+    organization_id: str,
+    report_id: str | None,
+    channel_id: str | None,
+    channel_type: str,
+) -> DeliveryLogRow:
+    return DeliveryLogRow(
+        id=uuid.uuid4(),
+        organization_id=_as_uuid(organization_id),
+        report_id=_as_uuid(report_id),
+        channel_id=_as_uuid(channel_id),
+        channel_type=channel_type,
+        status="PENDING",
+        attempt_count=0,
+        created_at=datetime.now(timezone.utc),
+    )
+
+
+def _to_log(row: DeliveryLogRow) -> DeliveryLog:
+    return DeliveryLog(
+        id=str(row.id),
+        organization_id=str(row.organization_id),
+        report_id=str(row.report_id) if row.report_id else None,
+        channel_id=str(row.channel_id) if row.channel_id else None,
+        channel_type=row.channel_type,
+        status=row.status,
+        attempt_count=row.attempt_count,
+        error_code=row.error_code,
+        error_message=row.error_message,
+        sent_at=row.sent_at.isoformat() if row.sent_at else None,
+        created_at=row.created_at.isoformat(),
+    )
+
+
 async def deliver_report(
+    db: AsyncSession,
     organization_id: str,
     report_id: str | None,
     channel_type: str,
@@ -210,41 +363,123 @@ async def deliver_report(
     channel_id: str | None = None,
 ) -> DeliveryLog:
     provider = get_provider(channel_type)
-    log = DeliveryLog(
-        id=str(uuid.uuid4()),
-        organization_id=organization_id,
-        report_id=report_id,
-        channel_id=channel_id,
-        channel_type=channel_type,
-        status="PENDING",
-        attempt_count=0,
-        error_code=None,
-        error_message=None,
-        sent_at=None,
-        created_at=datetime.now(timezone.utc).isoformat(),
-    )
+
+    # Written as PENDING before the first attempt so an in-flight delivery is
+    # still visible if the process dies mid-send.
+    row = _new_log_row(organization_id, report_id, channel_id, channel_type)
+    db.add(row)
+    await db.commit()
 
     for attempt in range(MAX_RETRIES):
-        log.attempt_count = attempt + 1
+        row.attempt_count = attempt + 1
         result = await provider.send(content, subject, channel_config)
 
         if result.success:
-            log.status = "SENT"
-            log.sent_at = datetime.now(timezone.utc).isoformat()
+            row.status = "SENT"
+            row.sent_at = datetime.now(timezone.utc)
             break
         else:
-            log.error_code = result.error_code
-            log.error_message = result.error_message
+            row.error_code = result.error_code
+            row.error_message = redact_secrets(result.error_message, channel_config)
             if attempt == MAX_RETRIES - 1:
-                log.status = "FAILED"
+                row.status = "FAILED"
 
-    _log_store.append(log)
-    return log
+    await db.commit()
+    return _to_log(row)
 
 
-def get_delivery_logs(organization_id: str, report_id: str | None = None, limit: int = 50) -> list[DeliveryLog]:
-    results = [l for l in _log_store if l.organization_id == organization_id]
+def render_report_content(content: dict) -> str:
+    """Flatten any of the report content shapes into readable plain text."""
+    sections = []
+    for key, value in (content or {}).items():
+        if key in ("type", "title"):
+            continue
+        label = key.replace("_", " ").title()
+        if isinstance(value, str) and value.strip():
+            sections.append(f"{label}\n{value.strip()}")
+        elif isinstance(value, list) and value:
+            lines = []
+            for item in value:
+                if isinstance(item, dict):
+                    parts = [str(item[k]) for k in ("key", "summary", "detail") if item.get(k)]
+                    lines.append(f"- {' - '.join(parts)}" if parts else f"- {item}")
+                else:
+                    lines.append(f"- {item}")
+            sections.append(f"{label}\n" + "\n".join(lines))
+    return "\n\n".join(sections)
+
+
+async def deliver_report_to_channels(
+    db: AsyncSession,
+    organization_id: str,
+    report: "StoredReport",
+) -> list[DeliveryLog]:
+    """Fan a stored report out to every enabled channel for the organization."""
+    result = await db.execute(
+        select(DeliveryChannelRow)
+        .where(
+            DeliveryChannelRow.organization_id == _as_uuid(organization_id),
+            DeliveryChannelRow.enabled.is_(True),
+        )
+        .order_by(DeliveryChannelRow.created_at)
+    )
+    channels = result.scalars().all()
+
+    content = render_report_content(report.edited_content or report.generated_content)
+    logs = []
+
+    for channel in channels:
+        try:
+            config = decode_channel_config(channel.config)
+            get_provider(channel.channel_type)
+        except (EncryptionNotConfigured, ValueError) as e:
+            logger.warning("Skipping channel %s: %s", channel.id, e)
+            logs.append(
+                await _log_skipped_channel(db, organization_id, report.id, channel, str(e))
+            )
+            continue
+
+        logs.append(
+            await deliver_report(
+                db,
+                organization_id=organization_id,
+                report_id=report.id,
+                channel_type=channel.channel_type,
+                channel_config=config,
+                content=content,
+                subject=report.title,
+                channel_id=str(channel.id),
+            )
+        )
+
+    return logs
+
+
+async def _log_skipped_channel(
+    db: AsyncSession,
+    organization_id: str,
+    report_id: str | None,
+    channel: DeliveryChannelRow,
+    message: str,
+) -> DeliveryLog:
+    row = _new_log_row(organization_id, report_id, str(channel.id), channel.channel_type)
+    row.status = "FAILED"
+    row.error_code = "CONFIG_ERROR"
+    row.error_message = message[:500]
+    db.add(row)
+    await db.commit()
+    return _to_log(row)
+
+
+async def get_delivery_logs(
+    db: AsyncSession,
+    organization_id: str,
+    report_id: str | None = None,
+    limit: int = 50,
+) -> list[DeliveryLog]:
+    stmt = select(DeliveryLogRow).where(DeliveryLogRow.organization_id == _as_uuid(organization_id))
     if report_id:
-        results = [l for l in results if l.report_id == report_id]
-    results.sort(key=lambda l: l.created_at, reverse=True)
-    return results[:limit]
+        stmt = stmt.where(DeliveryLogRow.report_id == _as_uuid(report_id))
+    stmt = stmt.order_by(DeliveryLogRow.created_at.desc()).limit(limit)
+    result = await db.execute(stmt)
+    return [_to_log(row) for row in result.scalars().all()]

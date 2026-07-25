@@ -1,11 +1,20 @@
-fastapi
-uvicorn
-httpx
-pydantic
-pydantic-settings
-python-dotenv
-sqlalchemy[asyncio]
-asyncpg
-alembic
-python-jose[cryptography]
-tzdata
+# Pinned so a deploy can't silently pick up a breaking release.
+fastapi==0.140.0
+uvicorn==0.51.0
+httpx==0.28.1
+pydantic==2.13.4
+pydantic-settings==2.14.2
+python-dotenv==1.2.2
+sqlalchemy[asyncio]==2.0.51
+asyncpg==0.31.0
+alembic==1.18.5
+python-jose[cryptography]==3.5.0
+cryptography==49.0.0
+tzdata==2026.3
+
+# Claude report generation. Without a key the app falls back to Ollama and then
+# to deterministic reports, so this is required to install but not to run.
+anthropic==0.120.0
+
+# Optional error monitoring; imported lazily only when SENTRY_DSN is set.
+sentry-sdk==2.42.1

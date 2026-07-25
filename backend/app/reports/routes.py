@@ -1,6 +1,8 @@
 from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.core.database import get_db
 from app.core.security import get_current_org_member, require_role
 from app.models.tables import OrganizationMember
 from app.reports.storage import (
@@ -30,8 +32,9 @@ class ApprovalRequest(BaseModel):
 @router.get("/templates", response_model=list[ReportTemplate])
 async def get_report_templates(
     member: OrganizationMember = Depends(get_current_org_member),
+    db: AsyncSession = Depends(get_db),
 ):
-    return get_templates(str(member.organization_id))
+    return await get_templates(db, str(member.organization_id))
 
 
 @router.get("", response_model=list[StoredReport])
@@ -42,8 +45,10 @@ async def list_all_reports(
     limit: int = Query(default=50, le=100),
     offset: int = Query(default=0, ge=0),
     member: OrganizationMember = Depends(get_current_org_member),
+    db: AsyncSession = Depends(get_db),
 ):
-    return list_reports(
+    return await list_reports(
+        db,
         organization_id=str(member.organization_id),
         project_key=project_key,
         report_type=report_type,
@@ -57,8 +62,9 @@ async def list_all_reports(
 async def get_single_report(
     report_id: str,
     member: OrganizationMember = Depends(get_current_org_member),
+    db: AsyncSession = Depends(get_db),
 ):
-    report = get_report(report_id, str(member.organization_id))
+    report = await get_report(db, report_id, str(member.organization_id))
     if not report:
         raise HTTPException(status_code=404, detail="Report not found")
     return report
@@ -69,8 +75,9 @@ async def edit_existing_report(
     report_id: str,
     body: EditRequest,
     member: OrganizationMember = Depends(require_role("OWNER", "ADMIN", "MEMBER")),
+    db: AsyncSession = Depends(get_db),
 ):
-    report = edit_report(report_id, str(member.organization_id), body.edited_content)
+    report = await edit_report(db, report_id, str(member.organization_id), body.edited_content)
     if not report:
         raise HTTPException(status_code=404, detail="Report not found")
     return report
@@ -81,8 +88,10 @@ async def update_report_approval(
     report_id: str,
     body: ApprovalRequest,
     member: OrganizationMember = Depends(require_role("OWNER", "ADMIN")),
+    db: AsyncSession = Depends(get_db),
 ):
-    report = update_approval(
+    report = await update_approval(
+        db,
         report_id,
         str(member.organization_id),
         body.status,
@@ -98,10 +107,11 @@ async def compare_two_reports(
     report_a_id: str,
     report_b_id: str,
     member: OrganizationMember = Depends(get_current_org_member),
+    db: AsyncSession = Depends(get_db),
 ):
     org_id = str(member.organization_id)
-    a = get_report(report_a_id, org_id)
-    b = get_report(report_b_id, org_id)
+    a = await get_report(db, report_a_id, org_id)
+    b = await get_report(db, report_b_id, org_id)
     if not a or not b:
         raise HTTPException(status_code=404, detail="One or both reports not found")
     return compare_reports(a, b)

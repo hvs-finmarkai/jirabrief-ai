@@ -68,8 +68,16 @@ async def list_members(
     member: OrganizationMember = Depends(get_current_org_member),
     db: AsyncSession = Depends(get_db),
 ):
+    # get_current_org_member only proves membership of the org named in the
+    # X-Organization-Id header. Querying by the path's org_id without comparing
+    # the two let any member of any org read another org's member list.
+    if member.organization_id != org_id:
+        raise HTTPException(status_code=403, detail="Not a member of this organization")
+
     result = await db.execute(
-        select(OrganizationMember).where(OrganizationMember.organization_id == org_id)
+        select(OrganizationMember).where(
+            OrganizationMember.organization_id == member.organization_id
+        )
     )
     members = result.scalars().all()
     return [
@@ -91,10 +99,15 @@ async def remove_member(
     current_member: OrganizationMember = Depends(require_role("OWNER", "ADMIN")),
     db: AsyncSession = Depends(get_db),
 ):
+    # Same trap as list_members: require_role authorises against the header's
+    # org, so an admin of one org could otherwise remove a member of another.
+    if current_member.organization_id != org_id:
+        raise HTTPException(status_code=403, detail="Not a member of this organization")
+
     result = await db.execute(
         select(OrganizationMember).where(
             OrganizationMember.id == member_id,
-            OrganizationMember.organization_id == org_id,
+            OrganizationMember.organization_id == current_member.organization_id,
         )
     )
     target = result.scalar_one_or_none()

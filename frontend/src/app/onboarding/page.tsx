@@ -4,6 +4,7 @@ import { useState } from "react"
 import { useRouter } from "next/navigation"
 import { motion } from "framer-motion"
 import { Building2, ArrowRight, Loader2 } from "lucide-react"
+import { api, errorMessage } from "@/lib/api"
 
 export default function OnboardingPage() {
   const router = useRouter()
@@ -17,22 +18,11 @@ export default function OnboardingPage() {
     setError(null)
 
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/organizations`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ name: orgName }),
-      })
-
-      if (!response.ok) {
-        const data = await response.json()
-        throw new Error(data.detail || "Failed to create organization")
-      }
-
+      await api.organizations.create({ name: orgName })
       router.push("/dashboard")
       router.refresh()
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong")
+      setError(errorMessage(err, "Failed to create organization"))
       setLoading(false)
     }
   }

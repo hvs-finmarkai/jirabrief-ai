@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react"
 import { motion } from "framer-motion"
-import { FileText, Filter, Search, Plus, ChevronRight, CheckCircle2, Clock, Send } from "lucide-react"
+import { FileText, Search, Plus, ChevronRight } from "lucide-react"
 import Link from "next/link"
 import { api, type ReportResponse } from "@/lib/api"
 
@@ -27,22 +27,24 @@ export default function ReportsPage() {
   const [searchQuery, setSearchQuery] = useState("")
 
   useEffect(() => {
-    loadReports()
-  }, [typeFilter])
+    let cancelled = false
 
-  async function loadReports() {
-    setLoading(true)
-    try {
-      const params = new URLSearchParams()
-      if (typeFilter) params.set("report_type", typeFilter)
-      const data = await api.demo.listReports(typeFilter || undefined)
-      setReports(data)
-    } catch {
-      setReports([])
-    } finally {
-      setLoading(false)
+    api.demo
+      .listReports(typeFilter || undefined)
+      .then((data) => {
+        if (!cancelled) setReports(data)
+      })
+      .catch(() => {
+        if (!cancelled) setReports([])
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+
+    return () => {
+      cancelled = true
     }
-  }
+  }, [typeFilter])
 
   const filteredReports = searchQuery
     ? reports.filter((r) => r.title.toLowerCase().includes(searchQuery.toLowerCase()) || r.project_key.toLowerCase().includes(searchQuery.toLowerCase()))
