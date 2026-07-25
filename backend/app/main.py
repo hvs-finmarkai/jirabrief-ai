@@ -11,6 +11,7 @@ from app.reports.routes import router as reports_router
 from app.schedules.routes import router as schedules_router
 from app.notifications.routes import router as notifications_router
 from app.delivery.routes import router as delivery_router
+from app.admin.routes import router as admin_router
 
 settings = get_settings()
 
@@ -53,6 +54,7 @@ app.include_router(reports_router)
 app.include_router(schedules_router)
 app.include_router(notifications_router)
 app.include_router(delivery_router)
+app.include_router(admin_router)
 
 
 @app.get("/api/health")
