@@ -1,13 +1,15 @@
 "use client"
 
+import { useState, useEffect } from "react"
 import { motion } from "framer-motion"
-import { BarChart3, FileText, Calendar, AlertTriangle } from "lucide-react"
+import { BarChart3, FileText, Calendar, AlertTriangle, Sparkles } from "lucide-react"
+import Link from "next/link"
 
 const stats = [
-  { label: "Connected Projects", value: "0", icon: BarChart3 },
-  { label: "Reports This Month", value: "0", icon: FileText },
+  { label: "Connected Projects", value: "3", icon: BarChart3 },
+  { label: "Reports Generated", value: "0", icon: FileText },
   { label: "Scheduled Reports", value: "0", icon: Calendar },
-  { label: "Attention Items", value: "0", icon: AlertTriangle },
+  { label: "Attention Items", value: "2", icon: AlertTriangle },
 ]
 
 export default function DashboardPage() {
@@ -41,20 +43,53 @@ export default function DashboardPage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="bg-white rounded-xl border border-warm-200 p-6">
-          <h2 className="text-sm font-semibold text-charcoal mb-4">Recent Reports</h2>
-          <div className="flex flex-col items-center justify-center py-8 text-center">
-            <FileText className="w-8 h-8 text-warm-300 mb-3" />
-            <p className="text-sm text-warm-500">No reports yet</p>
-            <p className="text-xs text-warm-400 mt-1">Generate your first report after connecting Jira</p>
+          <h2 className="text-sm font-semibold text-charcoal mb-4">Quick Actions</h2>
+          <div className="space-y-2">
+            <Link href="/demo" className="flex items-center gap-3 p-3 rounded-lg hover:bg-warm-50 transition-colors">
+              <div className="w-8 h-8 rounded-lg bg-accent/10 flex items-center justify-center">
+                <Sparkles className="w-4 h-4 text-accent" />
+              </div>
+              <div>
+                <p className="text-sm font-medium text-charcoal">Generate Report</p>
+                <p className="text-xs text-warm-400">Create a new AI-powered report</p>
+              </div>
+            </Link>
+            <Link href="/integrations" className="flex items-center gap-3 p-3 rounded-lg hover:bg-warm-50 transition-colors">
+              <div className="w-8 h-8 rounded-lg bg-warm-100 flex items-center justify-center">
+                <BarChart3 className="w-4 h-4 text-warm-500" />
+              </div>
+              <div>
+                <p className="text-sm font-medium text-charcoal">Connect Jira</p>
+                <p className="text-xs text-warm-400">Link your Jira Cloud instance</p>
+              </div>
+            </Link>
           </div>
         </div>
 
         <div className="bg-white rounded-xl border border-warm-200 p-6">
-          <h2 className="text-sm font-semibold text-charcoal mb-4">Jira Sync Health</h2>
-          <div className="flex flex-col items-center justify-center py-8 text-center">
-            <BarChart3 className="w-8 h-8 text-warm-300 mb-3" />
-            <p className="text-sm text-warm-500">No Jira connected</p>
-            <p className="text-xs text-warm-400 mt-1">Connect Jira in Integrations to get started</p>
+          <h2 className="text-sm font-semibold text-charcoal mb-4">Demo Workspace</h2>
+          <div className="space-y-3">
+            <div className="flex items-center justify-between p-3 bg-warm-50 rounded-lg">
+              <div>
+                <p className="text-sm font-medium text-charcoal">CRM Migration</p>
+                <p className="text-xs text-warm-400">Sprint 24 · 14 issues · 42.9% complete</p>
+              </div>
+              <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-status-blocked/10 text-status-blocked">Needs Attention</span>
+            </div>
+            <div className="flex items-center justify-between p-3 bg-warm-50 rounded-lg">
+              <div>
+                <p className="text-sm font-medium text-charcoal">Customer Portal</p>
+                <p className="text-xs text-warm-400">Sprint 12 · 3 issues · Active</p>
+              </div>
+              <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-status-progress/10 text-status-progress">On Track</span>
+            </div>
+            <div className="flex items-center justify-between p-3 bg-warm-50 rounded-lg">
+              <div>
+                <p className="text-sm font-medium text-charcoal">Mobile Application</p>
+                <p className="text-xs text-warm-400">Sprint 8 · 3 issues · Active</p>
+              </div>
+              <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-status-done/10 text-status-done">Healthy</span>
+            </div>
           </div>
         </div>
       </div>

@@ -41,6 +41,23 @@ async def get_current_user(request: Request, db: AsyncSession = Depends(get_db))
 
         profile = Profile(user_id=user_id, display_name=display_name, avatar_url=avatar_url)
         db.add(profile)
+        await db.flush()
+
+        demo_org_id = "00000000-0000-0000-0000-000000000001"
+        existing_membership = await db.execute(
+            select(OrganizationMember).where(
+                OrganizationMember.user_id == user_id,
+                OrganizationMember.organization_id == demo_org_id,
+            )
+        )
+        if not existing_membership.scalar_one_or_none():
+            member = OrganizationMember(
+                organization_id=demo_org_id,
+                user_id=user_id,
+                role="OWNER",
+            )
+            db.add(member)
+
         await db.commit()
         await db.refresh(profile)
 
