@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "llama3.2"
     ai_provider: str = "ollama"
+    sentry_dsn: str = ""
+    resend_api_key: str = ""
 
     class Config:
         env_file = ".env"

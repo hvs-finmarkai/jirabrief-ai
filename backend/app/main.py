@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import get_settings
+from app.core.rate_limit import RateLimitMiddleware
 from app.auth.routes import router as auth_router
 from app.organizations.routes import router as org_router
 from app.demo.routes import router as demo_router
@@ -11,22 +12,36 @@ from app.schedules.routes import router as schedules_router
 from app.notifications.routes import router as notifications_router
 from app.delivery.routes import router as delivery_router
 
+settings = get_settings()
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    if settings.sentry_dsn:
+        try:
+            import sentry_sdk
+            sentry_sdk.init(dsn=settings.sentry_dsn, environment=settings.app_env, traces_sample_rate=0.1)
+        except ImportError:
+            pass
     yield
 
 
-app = FastAPI(title="JiraBrief AI", version="1.0.0", lifespan=lifespan)
+app = FastAPI(
+    title="JiraBrief AI",
+    version="1.0.0",
+    lifespan=lifespan,
+    docs_url="/api/docs" if settings.app_env == "development" else None,
+    redoc_url=None,
+)
 
-settings = get_settings()
+app.add_middleware(RateLimitMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
-    allow_headers=["*"],
+    allow_headers=["Authorization", "Content-Type", "X-Organization-Id", "X-Request-Id"],
     expose_headers=["X-Request-Id"],
 )
 
