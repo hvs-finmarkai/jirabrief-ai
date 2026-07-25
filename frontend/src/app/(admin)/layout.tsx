@@ -2,7 +2,7 @@ import { redirect } from "next/navigation"
 import { createClient } from "@/lib/supabase/server"
 import { AdminSidebar } from "@/components/admin-sidebar"
 
-const ADMIN_EMAILS = ["admin@finmarkai.com"]
+const ADMIN_EMAILS = ["admin@finmarkai.com", "admin@finmark.ai"]
 
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
   const supabase = await createClient()
