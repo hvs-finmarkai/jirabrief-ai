@@ -8,7 +8,6 @@ import {
   FileText,
   Calendar,
   FileCode2,
-  Settings,
   LogOut,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
@@ -16,6 +15,7 @@ import type { User } from "@supabase/supabase-js"
 
 interface SidebarProps {
   user: User
+  isAdmin?: boolean
 }
 
 const navigation = [
@@ -66,22 +66,6 @@ export function Sidebar({ user }: SidebarProps) {
             </a>
           )
         })}
-
-        <div className="pt-3 mt-3 border-t border-warm-100">
-          <p className="px-3 py-1 text-xs font-medium text-warm-400 uppercase tracking-wide">Administration</p>
-          <a
-            href="/admin"
-            className={cn(
-              "flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors mt-1",
-              pathname.startsWith("/admin")
-                ? "bg-warm-100 text-charcoal font-medium"
-                : "text-warm-600 hover:bg-warm-50 hover:text-charcoal"
-            )}
-          >
-            <Settings className="w-4 h-4 shrink-0" />
-            Admin Console
-          </a>
-        </div>
       </nav>
 
       <div className="p-3 border-t border-warm-100">
