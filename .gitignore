@@ -9,5 +9,4 @@ venv
 .idea
 .vscode
 *.log
-
 .vercel
