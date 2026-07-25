@@ -8,7 +8,6 @@ import {
   FileText,
   Calendar,
   FileCode2,
-  Plug,
   Settings,
   LogOut,
 } from "lucide-react"
@@ -25,8 +24,6 @@ const navigation = [
   { name: "Reports", href: "/reports", icon: FileText },
   { name: "Schedules", href: "/schedules", icon: Calendar },
   { name: "Templates", href: "/templates", icon: FileCode2 },
-  { name: "Integrations", href: "/integrations", icon: Plug },
-  { name: "Settings", href: "/settings", icon: Settings },
 ]
 
 export function Sidebar({ user }: SidebarProps) {
