@@ -4,7 +4,7 @@ import { useState } from "react"
 import { useRouter } from "next/navigation"
 import Link from "next/link"
 import { motion } from "framer-motion"
-import { Mail, Lock, ArrowRight, Loader2 } from "lucide-react"
+import { Mail, Lock, ArrowRight, Loader2, Sparkles } from "lucide-react"
 import { createClient } from "@/lib/supabase/client"
 
 export default function LoginPage() {
@@ -131,6 +131,14 @@ export default function LoginPage() {
             <Link href="/signup" className="text-accent hover:text-accent-hover transition-colors font-medium">
               Create account
             </Link>
+          </div>
+
+          <div className="mt-4 pt-4 border-t border-warm-100">
+            <Link href="/demo" className="w-full flex items-center justify-center gap-2 py-2.5 bg-accent/10 text-accent rounded-xl text-sm font-medium hover:bg-accent/15 transition-colors">
+              <Sparkles className="w-4 h-4" />
+              Explore Demo
+            </Link>
+            <p className="text-xs text-warm-400 text-center mt-2">Try with realistic sample data — no account needed</p>
           </div>
         </div>
       </motion.div>

@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     supabase_service_role_key: str = ""
     supabase_jwt_secret: str = ""
     cors_origins: list[str] = ["http://localhost:3000"]
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_model: str = "llama3.2"
+    ai_provider: str = "ollama"
 
     class Config:
         env_file = ".env"
