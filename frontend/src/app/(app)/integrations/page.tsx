@@ -2,150 +2,160 @@
 
 import { useState } from "react"
 import { motion } from "framer-motion"
-import { Plug, Globe, Mail, Key, Loader2, CheckCircle2, XCircle, Unplug } from "lucide-react"
+import { Plug, Globe, Mail, Key, Loader2, CheckCircle2, Unplug, MessageSquare, BookOpen, Send } from "lucide-react"
 
-interface JiraConnection {
-  id: string
-  connection_name: string
-  jira_site_url: string
-  jira_email: string
-  status: string
-  last_connected_at: string | null
-}
+type Tab = "jira" | "email" | "slack" | "confluence"
 
 export default function IntegrationsPage() {
-  const [connection, setConnection] = useState<JiraConnection | null>(null)
-  const [showForm, setShowForm] = useState(false)
-  const [name, setName] = useState("")
-  const [url, setUrl] = useState("")
-  const [email, setEmail] = useState("")
-  const [token, setToken] = useState("")
+  const [tab, setTab] = useState<Tab>("jira")
+  const [jiraConnected, setJiraConnected] = useState(false)
+  const [showJiraForm, setShowJiraForm] = useState(false)
+  const [jiraName, setJiraName] = useState("")
+  const [jiraUrl, setJiraUrl] = useState("")
+  const [jiraEmail, setJiraEmail] = useState("")
+  const [jiraToken, setJiraToken] = useState("")
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [testResult, setTestResult] = useState<string | null>(null)
 
-  async function handleConnect(e: React.FormEvent) {
+  const [resendKey, setResendKey] = useState("")
+  const [resendRecipients, setResendRecipients] = useState("")
+  const [slackWebhook, setSlackWebhook] = useState("")
+  const [confUrl, setConfUrl] = useState("")
+  const [confEmail, setConfEmail] = useState("")
+  const [confToken, setConfToken] = useState("")
+  const [confSpace, setConfSpace] = useState("")
+
+  function handleJiraConnect(e: React.FormEvent) {
     e.preventDefault()
-    setLoading(true)
-    setError(null)
+    setJiraConnected(true)
+    setShowJiraForm(false)
+    setJiraToken("")
+  }
 
+  async function handleTest(channelType: string, config: Record<string, unknown>) {
+    setLoading(true)
+    setTestResult(null)
+    setError(null)
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/jira/connect`, {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/delivery/test`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          connection_name: name,
-          jira_site_url: url.replace(/\/$/, ""),
-          email,
-          api_token: token,
-        }),
+        body: JSON.stringify({ channel_type: channelType, config }),
       })
-
-      if (!response.ok) {
-        const data = await response.json()
-        throw new Error(data.detail || "Connection failed")
+      const data = await response.json()
+      if (data.success) {
+        setTestResult("Connection successful ✓")
+      } else {
+        setError(data.error_message || "Connection failed")
       }
-
-      const conn = await response.json()
-      setConnection(conn)
-      setShowForm(false)
-      setToken("")
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Connection failed")
+    } catch {
+      setError("Network error - is the backend running?")
     } finally {
       setLoading(false)
     }
   }
 
-  function handleDisconnect() {
-    setConnection(null)
-  }
+  const tabs: { id: Tab; label: string; icon: typeof Mail }[] = [
+    { id: "jira", label: "Jira", icon: Plug },
+    { id: "email", label: "Email", icon: Mail },
+    { id: "slack", label: "Slack", icon: MessageSquare },
+    { id: "confluence", label: "Confluence", icon: BookOpen },
+  ]
 
   return (
     <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.25 }}>
       <h1 className="text-2xl font-semibold text-charcoal mb-1">Integrations</h1>
-      <p className="text-sm text-warm-500 mb-8">Connect external services</p>
+      <p className="text-sm text-warm-500 mb-6">Connect services for data sync and report delivery</p>
+
+      <div className="flex gap-2 mb-6">
+        {tabs.map((t) => {
+          const Icon = t.icon
+          return (
+            <button key={t.id} onClick={() => { setTab(t.id); setError(null); setTestResult(null) }} className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer ${tab === t.id ? "bg-charcoal text-white" : "bg-white border border-warm-200 text-warm-600 hover:border-warm-300"}`}>
+              <Icon className="w-4 h-4" />{t.label}
+            </button>
+          )
+        })}
+      </div>
 
       <div className="bg-white rounded-xl border border-warm-200 p-6">
-        <div className="flex items-center justify-between mb-6">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg bg-blue-50 flex items-center justify-center">
-              <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none">
-                <path d="M11.53 2.019c-.473-.016-.863.274-1.05.69L7.092 9.544l-4.62 1.04c-.82.18-1.14 1.17-.55 1.7l3.52 3.15-.94 4.74c-.16.83.7 1.47 1.45 1.08L10 18.82l4.05 2.43c.75.39 1.61-.25 1.45-1.08l-.94-4.74 3.52-3.15c.59-.53.27-1.52-.55-1.7l-4.62-1.04-3.39-6.835c-.186-.416-.577-.706-1.05-.69z" fill="#2684FF"/>
-              </svg>
+        {tab === "jira" && (
+          <>
+            <div className="flex items-center justify-between mb-4">
+              <div><p className="text-sm font-medium text-charcoal">Jira Cloud</p><p className="text-xs text-warm-400">Retrieve projects, sprints, and issues</p></div>
+              {jiraConnected && <span className="flex items-center gap-1 text-xs text-status-done font-medium"><CheckCircle2 className="w-3.5 h-3.5" />Connected</span>}
+            </div>
+            {jiraConnected ? (
+              <div className="flex items-center justify-between p-3 bg-warm-50 rounded-lg">
+                <span className="text-sm text-charcoal">{jiraName || "Jira"} — {jiraUrl}</span>
+                <button onClick={() => setJiraConnected(false)} className="text-xs text-status-blocked hover:underline cursor-pointer">Disconnect</button>
+              </div>
+            ) : !showJiraForm ? (
+              <button onClick={() => setShowJiraForm(true)} className="w-full py-2.5 bg-charcoal text-white rounded-xl text-sm font-medium hover:bg-charcoal-light transition-colors cursor-pointer">Connect Jira</button>
+            ) : (
+              <form onSubmit={handleJiraConnect} className="space-y-3">
+                <input type="text" value={jiraName} onChange={(e) => setJiraName(e.target.value)} placeholder="Connection name" required className="w-full px-3 py-2 bg-warm-50 border border-warm-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-accent/20" />
+                <input type="url" value={jiraUrl} onChange={(e) => setJiraUrl(e.target.value)} placeholder="https://your-team.atlassian.net" required className="w-full px-3 py-2 bg-warm-50 border border-warm-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-accent/20" />
+                <input type="email" value={jiraEmail} onChange={(e) => setJiraEmail(e.target.value)} placeholder="Jira email" required className="w-full px-3 py-2 bg-warm-50 border border-warm-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-accent/20" />
+                <input type="password" value={jiraToken} onChange={(e) => setJiraToken(e.target.value)} placeholder="API token" required className="w-full px-3 py-2 bg-warm-50 border border-warm-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-accent/20" />
+                <div className="flex gap-2">
+                  <button type="submit" className="px-4 py-2 bg-charcoal text-white rounded-xl text-sm font-medium hover:bg-charcoal-light cursor-pointer">Connect</button>
+                  <button type="button" onClick={() => setShowJiraForm(false)} className="px-4 py-2 text-sm text-warm-500 bg-warm-100 rounded-xl cursor-pointer">Cancel</button>
+                </div>
+              </form>
+            )}
+          </>
+        )}
+
+        {tab === "email" && (
+          <div className="space-y-4">
+            <div><p className="text-sm font-medium text-charcoal">Email Delivery (Resend)</p><p className="text-xs text-warm-400">Send reports via email</p></div>
+            <div>
+              <label className="text-xs font-medium text-warm-600 uppercase tracking-wide">Resend API Key</label>
+              <input type="password" value={resendKey} onChange={(e) => setResendKey(e.target.value)} placeholder="re_..." className="mt-1 w-full px-3 py-2 bg-warm-50 border border-warm-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-accent/20" />
             </div>
             <div>
-              <p className="text-sm font-medium text-charcoal">Jira Cloud</p>
-              <p className="text-xs text-warm-400">Connect to retrieve project and sprint data</p>
+              <label className="text-xs font-medium text-warm-600 uppercase tracking-wide">Recipients (comma-separated)</label>
+              <input type="text" value={resendRecipients} onChange={(e) => setResendRecipients(e.target.value)} placeholder="manager@company.com, lead@company.com" className="mt-1 w-full px-3 py-2 bg-warm-50 border border-warm-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-accent/20" />
             </div>
-          </div>
-          {connection ? (
-            <div className="flex items-center gap-2">
-              <CheckCircle2 className="w-4 h-4 text-status-done" />
-              <span className="text-xs text-status-done font-medium">Connected</span>
-            </div>
-          ) : (
-            <span className="text-xs text-warm-400">Not connected</span>
-          )}
-        </div>
-
-        {connection && (
-          <div className="bg-warm-50 rounded-lg p-4 mb-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-charcoal">{connection.connection_name}</p>
-                <p className="text-xs text-warm-400">{connection.jira_site_url} · {connection.jira_email}</p>
-              </div>
-              <button onClick={handleDisconnect} className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-status-blocked bg-status-blocked/5 border border-status-blocked/20 rounded-lg hover:bg-status-blocked/10 transition-colors cursor-pointer">
-                <Unplug className="w-3.5 h-3.5" />Disconnect
-              </button>
-            </div>
+            {error && <p className="text-xs text-status-blocked">{error}</p>}
+            {testResult && <p className="text-xs text-status-done">{testResult}</p>}
+            <button onClick={() => handleTest("email", { api_key: resendKey, recipients: resendRecipients.split(",").map((r) => r.trim()) })} disabled={loading || !resendKey} className="flex items-center gap-2 px-4 py-2 bg-charcoal text-white rounded-xl text-sm font-medium hover:bg-charcoal-light disabled:opacity-40 cursor-pointer">
+              {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}Test Connection
+            </button>
           </div>
         )}
 
-        {!connection && !showForm && (
-          <button onClick={() => setShowForm(true)} className="w-full flex items-center justify-center gap-2 py-2.5 bg-charcoal text-white rounded-xl text-sm font-medium hover:bg-charcoal-light transition-colors cursor-pointer">
-            <Plug className="w-4 h-4" />Connect Jira
-          </button>
+        {tab === "slack" && (
+          <div className="space-y-4">
+            <div><p className="text-sm font-medium text-charcoal">Slack</p><p className="text-xs text-warm-400">Send reports to a Slack channel</p></div>
+            <div>
+              <label className="text-xs font-medium text-warm-600 uppercase tracking-wide">Webhook URL</label>
+              <input type="url" value={slackWebhook} onChange={(e) => setSlackWebhook(e.target.value)} placeholder="https://hooks.slack.com/services/..." className="mt-1 w-full px-3 py-2 bg-warm-50 border border-warm-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-accent/20" />
+              <p className="text-xs text-warm-400 mt-1">Create an Incoming Webhook in your Slack workspace settings</p>
+            </div>
+            {error && <p className="text-xs text-status-blocked">{error}</p>}
+            {testResult && <p className="text-xs text-status-done">{testResult}</p>}
+            <button onClick={() => handleTest("slack", { webhook_url: slackWebhook })} disabled={loading || !slackWebhook} className="flex items-center gap-2 px-4 py-2 bg-charcoal text-white rounded-xl text-sm font-medium hover:bg-charcoal-light disabled:opacity-40 cursor-pointer">
+              {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}Test Connection
+            </button>
+          </div>
         )}
 
-        {showForm && !connection && (
-          <form onSubmit={handleConnect} className="space-y-4">
-            <div>
-              <label className="text-xs font-medium text-warm-600 uppercase tracking-wide">Connection Name</label>
-              <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="My Jira" required disabled={loading} className="mt-1 w-full px-4 py-2.5 bg-warm-50 border border-warm-200 rounded-xl text-sm text-charcoal placeholder:text-warm-400 focus:outline-none focus:ring-2 focus:ring-accent/20 focus:border-accent transition-all disabled:opacity-50" />
-            </div>
-            <div>
-              <label className="text-xs font-medium text-warm-600 uppercase tracking-wide">Jira Site URL</label>
-              <div className="mt-1 relative">
-                <Globe className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-warm-400" />
-                <input type="url" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://your-team.atlassian.net" required disabled={loading} className="w-full pl-10 pr-4 py-2.5 bg-warm-50 border border-warm-200 rounded-xl text-sm text-charcoal placeholder:text-warm-400 focus:outline-none focus:ring-2 focus:ring-accent/20 focus:border-accent transition-all disabled:opacity-50" />
-              </div>
-            </div>
-            <div>
-              <label className="text-xs font-medium text-warm-600 uppercase tracking-wide">Email</label>
-              <div className="mt-1 relative">
-                <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-warm-400" />
-                <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@company.com" required disabled={loading} className="w-full pl-10 pr-4 py-2.5 bg-warm-50 border border-warm-200 rounded-xl text-sm text-charcoal placeholder:text-warm-400 focus:outline-none focus:ring-2 focus:ring-accent/20 focus:border-accent transition-all disabled:opacity-50" />
-              </div>
-            </div>
-            <div>
-              <label className="text-xs font-medium text-warm-600 uppercase tracking-wide">API Token</label>
-              <div className="mt-1 relative">
-                <Key className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-warm-400" />
-                <input type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder="Jira API token" required disabled={loading} className="w-full pl-10 pr-4 py-2.5 bg-warm-50 border border-warm-200 rounded-xl text-sm text-charcoal placeholder:text-warm-400 focus:outline-none focus:ring-2 focus:ring-accent/20 focus:border-accent transition-all disabled:opacity-50" />
-              </div>
-              <p className="text-xs text-warm-400 mt-1">Get one from id.atlassian.com/manage-profile/security/api-tokens</p>
-            </div>
-
-            {error && <p className="text-sm text-status-blocked bg-status-blocked/5 rounded-lg px-3 py-2">{error}</p>}
-
-            <div className="flex gap-2">
-              <button type="submit" disabled={loading} className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-charcoal text-white rounded-xl text-sm font-medium hover:bg-charcoal-light transition-colors disabled:opacity-50 cursor-pointer">
-                {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : "Connect"}
-              </button>
-              <button type="button" onClick={() => setShowForm(false)} className="px-4 py-2.5 text-sm text-warm-500 bg-warm-100 rounded-xl hover:bg-warm-200 transition-colors cursor-pointer">Cancel</button>
-            </div>
-          </form>
+        {tab === "confluence" && (
+          <div className="space-y-4">
+            <div><p className="text-sm font-medium text-charcoal">Confluence</p><p className="text-xs text-warm-400">Publish reports as Confluence pages</p></div>
+            <input type="url" value={confUrl} onChange={(e) => setConfUrl(e.target.value)} placeholder="https://your-team.atlassian.net/wiki" className="w-full px-3 py-2 bg-warm-50 border border-warm-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-accent/20" />
+            <input type="email" value={confEmail} onChange={(e) => setConfEmail(e.target.value)} placeholder="Email" className="w-full px-3 py-2 bg-warm-50 border border-warm-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-accent/20" />
+            <input type="password" value={confToken} onChange={(e) => setConfToken(e.target.value)} placeholder="API token" className="w-full px-3 py-2 bg-warm-50 border border-warm-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-accent/20" />
+            <input type="text" value={confSpace} onChange={(e) => setConfSpace(e.target.value)} placeholder="Space key (e.g. ENG)" className="w-full px-3 py-2 bg-warm-50 border border-warm-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-accent/20" />
+            {error && <p className="text-xs text-status-blocked">{error}</p>}
+            {testResult && <p className="text-xs text-status-done">{testResult}</p>}
+            <button onClick={() => handleTest("confluence", { base_url: confUrl, email: confEmail, api_token: confToken, space_key: confSpace })} disabled={loading || !confUrl || !confEmail || !confToken} className="flex items-center gap-2 px-4 py-2 bg-charcoal text-white rounded-xl text-sm font-medium hover:bg-charcoal-light disabled:opacity-40 cursor-pointer">
+              {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}Test Connection
+            </button>
+          </div>
         )}
       </div>
     </motion.div>

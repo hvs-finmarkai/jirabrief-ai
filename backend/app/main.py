@@ -9,6 +9,7 @@ from app.jira.routes import router as jira_router
 from app.reports.routes import router as reports_router
 from app.schedules.routes import router as schedules_router
 from app.notifications.routes import router as notifications_router
+from app.delivery.routes import router as delivery_router
 
 
 @asynccontextmanager
@@ -36,6 +37,7 @@ app.include_router(jira_router)
 app.include_router(reports_router)
 app.include_router(schedules_router)
 app.include_router(notifications_router)
+app.include_router(delivery_router)
 
 
 @app.get("/api/health")
