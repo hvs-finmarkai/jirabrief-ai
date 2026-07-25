@@ -1,25 +1,44 @@
 # JiraBrief AI
 
-AI-powered management report generator from Jira data. Generates Sprint Summaries, Status Reports, Executive Digests, and Release Notes.
+Turn Jira activity into stakeholder-ready reports. Multi-tenant SaaS with AI-powered report generation.
+
+## Architecture
+
+```
+Browser → Next.js (frontend) → FastAPI (backend) → PostgreSQL/Supabase
+                                    ├── Jira Cloud API
+                                    └── AI Provider (Ollama)
+```
 
 ## Requirements
 
 - Node.js 18+
 - Python 3.11+
-- Ollama (optional — fallback reports work without it)
+- PostgreSQL (via Supabase)
+- Supabase project (free tier)
 
 ## Setup
 
-### Frontend
+### 1. Supabase
+
+1. Create project at https://supabase.com
+2. Enable Email/Password auth in Authentication → Providers
+3. Enable Google OAuth in Authentication → Providers → Google
+4. Note your project URL, anon key, service role key, and JWT secret (Settings → API)
+
+### 2. Frontend
 
 ```bash
+cd frontend
+cp .env.example .env.local
+# Fill in your Supabase credentials
 npm install
 npm run dev
 ```
 
-Runs on http://localhost:5173
+Runs on http://localhost:3000
 
-### Backend
+### 3. Backend
 
 ```bash
 cd backend
@@ -32,59 +51,64 @@ python -m venv .venv
 source .venv/bin/activate
 
 pip install -r requirements.txt
+cp .env.example .env
+# Fill in your Supabase + database credentials
+
+# Run migrations
+alembic upgrade head
+
+# Start server
 uvicorn app.main:app --reload --port 8000
 ```
 
-Runs on http://localhost:8000
+### 4. Google OAuth
 
-### Ollama (Optional)
+1. Create OAuth consent screen in Google Cloud Console
+2. Create OAuth 2.0 credentials
+3. Add redirect URI: `https://your-project.supabase.co/auth/v1/callback`
+4. Add Client ID and Secret in Supabase → Authentication → Google
 
-Install from https://ollama.ai then:
+### 5. Ollama (for AI reports — Checkpoint 2)
 
 ```bash
+# Install from https://ollama.ai
 ollama pull llama3.2
 ```
 
-If Ollama is not running, the app generates structured fallback reports from the Jira data directly.
-
 ## Environment Variables
 
-Create `backend/.env`:
+### Frontend (.env.local)
 
+| Variable | Description |
+|----------|-------------|
+| NEXT_PUBLIC_SUPABASE_URL | Supabase project URL |
+| NEXT_PUBLIC_SUPABASE_ANON_KEY | Supabase anon/public key |
+| NEXT_PUBLIC_API_URL | Backend URL (http://localhost:8000) |
+
+### Backend (.env)
+
+| Variable | Description |
+|----------|-------------|
+| DATABASE_URL | PostgreSQL connection string |
+| SUPABASE_URL | Supabase project URL |
+| SUPABASE_ANON_KEY | Supabase anon key |
+| SUPABASE_SERVICE_ROLE_KEY | Supabase service role key |
+| SUPABASE_JWT_SECRET | JWT secret from Supabase Settings → API |
+| CORS_ORIGINS | Allowed frontend origins |
+
+## Database Migrations
+
+```bash
+cd backend
+alembic upgrade head      # Apply all migrations
+alembic downgrade -1      # Rollback one migration
 ```
-OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_MODEL=llama3.2
-```
-
-## Usage
-
-### Demo Mode
-
-1. Start both frontend and backend
-2. Click "Try Demo Mode"
-3. Select a project → sprint → report type
-4. Click Generate Report
-5. Copy or download the report
-
-### Real Jira Mode
-
-1. Get an API token from https://id.atlassian.com/manage-profile/security/api-tokens
-2. Enter your Jira URL (e.g., https://your-team.atlassian.net)
-3. Enter your email and API token
-4. Click "Connect to Jira"
-
-## Report Types
-
-- **Sprint Summary** — completed, in progress, blockers, next work
-- **Status Report** — current state, progress, risks, actions
-- **Executive Digest** — non-technical overview for leadership
-- **Release Notes** — new features, improvements, fixes
 
 ## Troubleshooting
 
 | Issue | Fix |
 |-------|-----|
-| Frontend can't reach backend | Ensure backend runs on port 8000; Vite proxies `/api` to it |
-| "Failed to connect to Jira" | Verify URL format includes `https://`, check email/token |
-| Empty report | Ensure the selected sprint has issues |
-| Ollama timeout | Model may be loading; first request takes longer |
+| CORS errors | Ensure CORS_ORIGINS includes your frontend URL |
+| 401 on API calls | Check SUPABASE_JWT_SECRET matches your project |
+| Google SSO redirect fails | Verify redirect URI in Google Console matches Supabase |
+| Database connection fails | Check DATABASE_URL and that Supabase is accessible |

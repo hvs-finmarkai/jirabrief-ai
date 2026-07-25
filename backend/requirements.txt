@@ -4,3 +4,7 @@ httpx
 pydantic
 pydantic-settings
 python-dotenv
+sqlalchemy[asyncio]
+asyncpg
+alembic
+python-jose[cryptography]
