@@ -206,6 +206,8 @@ async def update_schedule(
     if not row:
         return None
 
+    was_enabled = row.enabled
+
     for field in (
         "frequency",
         "day_of_week",
@@ -218,6 +220,12 @@ async def update_schedule(
         value = getattr(body, field)
         if value is not None:
             setattr(row, field, value)
+
+    # Re-enabling is the user saying "I've dealt with it". Without clearing the
+    # counter, a schedule auto-disabled at the failure limit would be disabled
+    # again by its very next failure.
+    if row.enabled and not was_enabled:
+        row.failure_count = 0
 
     row.next_run_at = _next_run_for(row)
     await db.commit()

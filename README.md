@@ -192,14 +192,13 @@ Stated plainly rather than oversold:
 - **Jira sync is read-through, not incremental.** Reports query Jira live; the
   `issues`/`sprints` tables exist for a future incremental sync and are not yet
   on the read path.
-- **Two frontend pages are not yet on the real API.** `/reports` still reads the
-  demo endpoints and `/schedules` holds its state locally. The typed client
-  methods (`api.reports.*`, `api.schedules.*`) exist and are bound to the real
-  endpoints — the pages just need switching over. Everything else (dashboard,
-  integrations, projects, templates, settings, onboarding) is on the real API.
+- **Reports are not paginated.** The list fetches the server's cap of 100 and
+  the response carries no total, so an organization with more than 100 reports
+  would silently see only the most recent ones.
 - **Team management is read-only.** Members can be listed and removed, but there
   are no invite or role-change endpoints yet, and the members list returns user
-  ids rather than display names.
+  ids rather than display names. The same gap means a report's approver shows as
+  a user id rather than a name.
 - **Saved delivery channels must be re-entered to test or send.** `/test` and
   `/send` take the full config in the request body rather than a saved channel
   id, so the UI cannot exercise a stored channel without retyping credentials.

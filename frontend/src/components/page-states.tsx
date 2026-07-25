@@ -79,6 +79,38 @@ export function EmptyState({
   )
 }
 
+/**
+ * Shown inside a form that cannot proceed without a Jira connection. Shared by
+ * the schedule-create and report-generate flows so both read identically.
+ */
+export function JiraRequiredNotice({
+  message,
+  onCancel,
+}: {
+  message: string
+  onCancel: () => void
+}) {
+  return (
+    <div>
+      <p className="text-sm text-warm-500">{message}</p>
+      <div className="flex gap-2 mt-4">
+        <Link
+          href="/integrations"
+          className="px-4 py-2 bg-charcoal text-white rounded-xl text-sm font-medium hover:bg-charcoal-light transition-colors"
+        >
+          Go to Integrations
+        </Link>
+        <button
+          onClick={onCancel}
+          className="px-4 py-2 text-sm text-warm-500 bg-warm-100 rounded-xl hover:bg-warm-200 transition-colors cursor-pointer"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  )
+}
+
 /** Shown when the signed-in user has no organization yet. */
 export function NoOrganizationState() {
   return (
