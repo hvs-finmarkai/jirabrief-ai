@@ -46,7 +46,53 @@ class OllamaProvider(AIProvider):
             return False
 
 
+class GroqProvider(AIProvider):
+    def __init__(self):
+        settings = get_settings()
+        self._api_key = settings.groq_api_key
+        self._model = settings.groq_model
+
+    async def generate(self, system_prompt: str, user_prompt: str) -> str:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {self._api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": self._model,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    "temperature": 0.3,
+                    "max_tokens": 3000,
+                    "response_format": {"type": "json_object"},
+                },
+            )
+            response.raise_for_status()
+            data = response.json()
+            return data["choices"][0]["message"]["content"]
+
+    async def health_check(self) -> bool:
+        if not self._api_key:
+            return False
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.get(
+                    "https://api.groq.com/openai/v1/models",
+                    headers={"Authorization": f"Bearer {self._api_key}"},
+                )
+                return response.status_code == 200
+        except Exception:
+            return False
+
+
 def get_ai_provider() -> AIProvider:
+    settings = get_settings()
+    if settings.ai_provider == "groq" and settings.groq_api_key:
+        return GroqProvider()
     return OllamaProvider()
 
 
