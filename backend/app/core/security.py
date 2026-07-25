@@ -51,12 +51,23 @@ async def get_current_user(request: Request, db: AsyncSession = Depends(get_db))
             )
         )
         if not existing_membership.scalar_one_or_none():
+            any_member = await db.execute(
+                select(OrganizationMember).where(OrganizationMember.organization_id == demo_org_id).limit(1)
+            )
+            is_first_user = any_member.scalar_one_or_none() is None
+            role = "OWNER" if is_first_user else "MEMBER"
+
             member = OrganizationMember(
                 organization_id=demo_org_id,
                 user_id=user_id,
-                role="OWNER",
+                role=role,
             )
             db.add(member)
+
+            if not is_first_user:
+                from app.admin.users import add_pending_user
+                email = payload.get("email", "unknown")
+                add_pending_user(email=email, display_name=display_name)
 
         await db.commit()
         await db.refresh(profile)
