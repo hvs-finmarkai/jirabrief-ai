@@ -45,13 +45,13 @@ export default function DashboardPage() {
         <div className="bg-white rounded-xl border border-warm-200 p-6">
           <h2 className="text-sm font-semibold text-charcoal mb-4">Quick Actions</h2>
           <div className="space-y-2">
-            <Link href="/demo" className="flex items-center gap-3 p-3 rounded-lg hover:bg-warm-50 transition-colors">
+            <Link href="/projects" className="flex items-center gap-3 p-3 rounded-lg hover:bg-warm-50 transition-colors">
               <div className="w-8 h-8 rounded-lg bg-accent/10 flex items-center justify-center">
                 <Sparkles className="w-4 h-4 text-accent" />
               </div>
               <div>
                 <p className="text-sm font-medium text-charcoal">Generate Report</p>
-                <p className="text-xs text-warm-400">Create a new AI-powered report</p>
+                <p className="text-xs text-warm-400">Select a project to create an AI-powered report</p>
               </div>
             </Link>
             <Link href="/integrations" className="flex items-center gap-3 p-3 rounded-lg hover:bg-warm-50 transition-colors">
