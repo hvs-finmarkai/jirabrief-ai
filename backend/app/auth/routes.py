@@ -13,6 +13,7 @@ async def get_me(profile: Profile = Depends(get_current_user)):
         id=profile.id,
         user_id=profile.user_id,
         display_name=profile.display_name,
+        email=profile.email,
         avatar_url=profile.avatar_url,
         created_at=profile.created_at,
     )

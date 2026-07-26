@@ -4,6 +4,8 @@ uvicorn==0.51.0
 httpx==0.28.1
 pydantic==2.13.4
 pydantic-settings==2.14.2
+# Required by pydantic's EmailStr, used to validate invite addresses.
+email-validator==2.3.0
 python-dotenv==1.2.2
 sqlalchemy[asyncio]==2.0.51
 asyncpg==0.31.0

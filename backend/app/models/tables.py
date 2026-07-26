@@ -27,10 +27,14 @@ class Profile(Base):
     __table_args__ = (
         UniqueConstraint("user_id"),
         Index("ix_profiles_user_id", "user_id"),
+        Index("ix_profiles_email", "email"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     user_id: Mapped[str] = mapped_column(String)
+    # Captured from the Supabase JWT on login. Nullable because rows created
+    # before this column existed have no address until their owner next logs in.
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     display_name: Mapped[str] = mapped_column(String(255))
     avatar_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -84,6 +88,26 @@ class OrganizationMember(Base):
         primaryjoin="OrganizationMember.user_id == Profile.user_id",
         viewonly=True,
     )
+
+
+class OrganizationInvite(Base):
+    __tablename__ = "organization_invites"
+    __table_args__ = (
+        UniqueConstraint("organization_id", "email", name="uq_org_invite_email"),
+        Index("ix_org_invites_org", "organization_id"),
+        Index("ix_org_invites_email", "email"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE")
+    )
+    email: Mapped[str] = mapped_column(String(255))
+    role: Mapped[str] = mapped_column(String(20), server_default="MEMBER")
+    invited_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    accepted_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 def _created() -> Mapped[datetime]:

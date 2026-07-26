@@ -282,18 +282,89 @@ export interface Organization {
   created_at: string
 }
 
-/** `app/models/schemas.py::OrganizationMemberResponse` */
+/**
+ * `app/models/schemas.py::OrganizationMemberResponse`
+ *
+ * `display_name` and `email` come from the member's profile and stay null until
+ * that person has signed in at least once.
+ */
 export interface OrganizationMember {
   id: string
   organization_id: string
   user_id: string
   role: string
   created_at: string
+  display_name: string | null
+  email: string | null
+}
+
+/** `app/models/schemas.py::InviteResponse` */
+export interface OrganizationInvite {
+  id: string
+  organization_id: string
+  email: string
+  role: string
+  invited_by: string | null
+  created_at: string
+}
+
+/** `RoleUpdateRequest` accepts any of these. */
+export type MemberRole = "OWNER" | "ADMIN" | "MEMBER" | "VIEWER"
+
+/** `MemberInviteRequest` excludes OWNER — nobody can be invited as an owner. */
+export type InviteRole = "ADMIN" | "MEMBER" | "VIEWER"
+
+export const MEMBER_ROLES: MemberRole[] = ["OWNER", "ADMIN", "MEMBER", "VIEWER"]
+
+/**
+ * `PRIVILEGED_ROLES` in app/organizations/routes.py. Only an OWNER may grant one
+ * of these, change someone who holds one, or remove them.
+ */
+export function isPrivilegedRole(role: string | null | undefined): boolean {
+  return role === "OWNER" || role === "ADMIN"
 }
 
 /** Mirrors the backend's `require_role("OWNER", "ADMIN")` gate. */
 export function canManageOrganization(role: string | null | undefined): boolean {
   return role === "OWNER" || role === "ADMIN"
+}
+
+/**
+ * Roles `actorRole` may assign to a member currently holding `targetRole`,
+ * mirroring `update_member_role`. An ADMIN is refused when either the current or
+ * the new role is privileged, so an admin can only swap MEMBER and VIEWER.
+ */
+export function assignableRoles(
+  actorRole: string | null | undefined,
+  targetRole: string
+): MemberRole[] {
+  if (actorRole === "OWNER") return MEMBER_ROLES
+  if (actorRole === "ADMIN" && !isPrivilegedRole(targetRole)) return ["MEMBER", "VIEWER"]
+  return []
+}
+
+/** Roles `actorRole` may invite someone as, mirroring `create_invite`. */
+export function invitableRoles(actorRole: string | null | undefined): InviteRole[] {
+  if (actorRole === "OWNER") return ["ADMIN", "MEMBER", "VIEWER"]
+  if (actorRole === "ADMIN") return ["MEMBER", "VIEWER"]
+  return []
+}
+
+/**
+ * Mirrors `remove_member`: admins may only remove unprivileged members, nobody
+ * may remove themselves, and the last remaining owner cannot be removed.
+ */
+export function canRemoveMember(options: {
+  actorRole: string | null | undefined
+  targetRole: string
+  isSelf: boolean
+  ownerCount: number
+}): boolean {
+  const { actorRole, targetRole, isSelf, ownerCount } = options
+  if (isSelf || !canManageOrganization(actorRole)) return false
+  if (actorRole !== "OWNER" && isPrivilegedRole(targetRole)) return false
+  if (targetRole === "OWNER" && ownerCount <= 1) return false
+  return true
 }
 
 /** `app/jira/routes.py::JiraConnectionResponse` */
@@ -550,6 +621,47 @@ export const api = {
     async removeMember(memberId: string, organizationId?: string): Promise<{ removed: boolean }> {
       const id = organizationId ?? (await getActiveOrgId())
       return orgRequest(`/api/organizations/${id}/members/${memberId}`, { method: "DELETE" })
+    },
+    /**
+     * PUT /api/organizations/{org_id}/members/{member_id}/role — OWNER/ADMIN only.
+     * 403 when an admin targets a privileged role or their own row; 409 when it
+     * would leave the organization without an owner.
+     */
+    async updateMemberRole(
+      memberId: string,
+      role: MemberRole,
+      organizationId?: string
+    ): Promise<OrganizationMember> {
+      const id = organizationId ?? (await getActiveOrgId())
+      return orgRequest(`/api/organizations/${id}/members/${memberId}/role`, {
+        method: "PUT",
+        body: JSON.stringify({ role }),
+      })
+    },
+    /** GET /api/organizations/{org_id}/invites — pending only, OWNER/ADMIN only */
+    async listInvites(organizationId?: string): Promise<OrganizationInvite[]> {
+      const id = organizationId ?? (await getActiveOrgId())
+      return orgRequest(`/api/organizations/${id}/invites`)
+    },
+    /**
+     * POST /api/organizations/{org_id}/invites — OWNER/ADMIN only.
+     * Re-inviting an address updates the existing invite rather than failing.
+     * 409 if that person is already a member, 422 if the email is malformed.
+     */
+    async createInvite(
+      body: { email: string; role: InviteRole },
+      organizationId?: string
+    ): Promise<OrganizationInvite> {
+      const id = organizationId ?? (await getActiveOrgId())
+      return orgRequest(`/api/organizations/${id}/invites`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      })
+    },
+    /** DELETE /api/organizations/{org_id}/invites/{invite_id} — OWNER/ADMIN only */
+    async revokeInvite(inviteId: string, organizationId?: string): Promise<{ revoked: boolean }> {
+      const id = organizationId ?? (await getActiveOrgId())
+      return orgRequest(`/api/organizations/${id}/invites/${inviteId}`, { method: "DELETE" })
     },
     /** The active org record, resolved from the stored org id. */
     active(): Promise<Organization> {

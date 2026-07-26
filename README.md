@@ -27,7 +27,7 @@ restart or redeploy.
 - Approval workflow (Draft → In Review → Approved → Sent)
 - Scheduling (daily/weekly/monthly, timezone-aware) executed by a background worker
 - Delivery: Email (Resend), Slack (webhook), Confluence (page creation)
-- Multi-tenant with RBAC (Owner, Admin, Member, Viewer)
+- Multi-tenant with RBAC (Owner, Admin, Member, Viewer), invites and role changes
 - Demo Mode with realistic sample data and no credentials required
 - Encrypted credential storage (Fernet + PBKDF2, dedicated key)
 
@@ -175,6 +175,10 @@ Before going live set `APP_ENV=production`, a real `TOKEN_ENCRYPTION_KEY`, and
 - Security headers on every response (CSP, HSTS in production, X-Frame-Options,
   X-Content-Type-Options, Referrer-Policy, Permissions-Policy)
 - Audit log persisted to the database, with credential fields redacted
+- Team management guardrails: only an owner may grant or alter owner/admin
+  roles, nobody may change their own role or remove themselves, and the last
+  remaining owner cannot be demoted or removed (which would leave the
+  organization with nobody able to administer it)
 
 ## Known limitations
 
@@ -195,10 +199,10 @@ Stated plainly rather than oversold:
 - **Reports are not paginated.** The list fetches the server's cap of 100 and
   the response carries no total, so an organization with more than 100 reports
   would silently see only the most recent ones.
-- **Team management is read-only.** Members can be listed and removed, but there
-  are no invite or role-change endpoints yet, and the members list returns user
-  ids rather than display names. The same gap means a report's approver shows as
-  a user id rather than a name.
+- **Invites are claimed by address, not by a link.** An admin records an email
+  and a role; that person joins automatically the next time they sign in with
+  it. Nothing is emailed, so whoever invites them has to tell them. An address
+  the identity provider reports as unverified will not claim an invite.
 - **Saved delivery channels must be re-entered to test or send.** `/test` and
   `/send` take the full config in the request body rather than a saved channel
   id, so the UI cannot exercise a stored channel without retyping credentials.
@@ -213,6 +217,8 @@ Stated plainly rather than oversold:
 | App won't start in production | `TOKEN_ENCRYPTION_KEY` is unset |
 | "Stored credential could not be decrypted" | `TOKEN_ENCRYPTION_KEY` changed — reconnect the integration |
 | Jira/Slack URL rejected as unsafe | The host resolves to a private address; the SSRF guard is working |
+| Invite rejected as an invalid email | Reserved domains (`.test`, `.local`, `.invalid`) are refused by the address validator — use a real domain |
+| Invited person isn't joining | They join on their next sign-in, and only if their identity provider reports the address as verified |
 | Google SSO fails | Check the redirect URI in Google Console |
 | Ollama timeout | The first request loads the model and takes longer |
 | Reports say "deterministic" | No AI provider reachable — expected fallback; check `ANTHROPIC_API_KEY` |
